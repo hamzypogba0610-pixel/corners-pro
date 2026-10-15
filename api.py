@@ -1,17 +1,24 @@
 """
 Serveur web du bot corners-pro.
-Version 4 : affiche les raisons du refus pour chaque ligne.
+Version 5 : sauvegarde locale des equipes (localStorage).
 """
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+import os
+
 from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.4.0")
+app = FastAPI(title="corners-pro", version="0.5.0")
+
+# Servir les fichiers statiques (JS, CSS)
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-def _page(titre, corps):
+def _page(titre, corps, scripts=""):
     return f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -34,10 +41,14 @@ def _page(titre, corps):
       font-family:inherit; font-size:15px;
     }}
     textarea {{ min-height:220px; font-family:monospace; font-size:12px; }}
-    button {{ margin-top:24px; width:100%; padding:14px;
+    button {{ margin-top:14px; width:100%; padding:14px;
       background:#238636; color:white; border:none;
       border-radius:8px; font-size:16px; font-weight:bold; }}
     button:active {{ background:#2ea043; }}
+    .btn-sec {{ background:#21262d; color:#c9d1d9; padding:8px 12px;
+                font-size:13px; width:auto; margin:4px 4px 0 0;
+                font-weight:normal; }}
+    .btn-sec:active {{ background:#30363d; }}
     .card {{ background:#161b22; border:1px solid #30363d; border-radius:10px;
              padding:14px; margin-top:12px; }}
     .ok {{ color:#3fb950; font-weight:bold; }}
@@ -55,10 +66,13 @@ def _page(titre, corps):
                 margin-top:8px; font-size:12px; color:#d29922; }}
     .raisons ul {{ margin:6px 0 0 16px; padding:0; }}
     code {{ background:#21262d; padding:2px 6px; border-radius:4px; font-size:11px; }}
+    .barre-equipe {{ margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }}
+    .barre-equipe select {{ flex:1; min-width:150px; font-size:13px; padding:8px; }}
   </style>
 </head>
 <body>
 {corps}
+{scripts}
 </body>
 </html>"""
 
@@ -69,11 +83,10 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.4.0 — rapport détaillé</div>
+        <div class="info">Version 0.5.0 — sauvegarde des équipes</div>
       </div>
-      <p style="margin-top:24px;">
-        <a href="/nouveau">→ Lancer une nouvelle analyse</a>
-      </p>
+      <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
+      <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
     """)
 
 
@@ -87,9 +100,9 @@ def nouveau():
         <label>Compétition</label>
         <input name="competition" required placeholder="Ligue 1">
         <label>Équipe domicile</label>
-        <input name="home_team" required placeholder="Paris">
+        <input name="home_team" id="home_team" required placeholder="Paris">
         <label>Équipe extérieur</label>
-        <input name="away_team" required placeholder="Lyon">
+        <input name="away_team" id="away_team" required placeholder="Lyon">
         <label>Date</label>
         <input name="date" required placeholder="2026-02-01">
         <label>Mode</label>
@@ -108,13 +121,40 @@ def nouveau():
 
         <h2>3. Historique équipe domicile (15 matchs à domicile)</h2>
         <div class="info">
-          <code>date,adversaire,c1h,c2h,rf,rmt,rouge,xg,xga,xgot,xgota</code><br>
-          rf/rmt = V/N/D — rouge = 0/1/2 — xg = décimales (point)
+          <code>date,adversaire,c1h,c2h,rf,rmt,rouge,xg,xga,xgot,xgota</code>
         </div>
-        <textarea name="home_history" required placeholder="2026-01-15,Marseille,3,4,V,N,0,1.5,0.9,1.2,0.7"></textarea>
+        <div class="barre-equipe">
+          <select id="select_home">
+            <option value="">— Choisir une équipe —</option>
+          </select>
+          <button type="button" class="btn-sec"
+                  onclick="remplirDepuisListe('home_history','select_home')">
+            📂 Charger
+          </button>
+          <button type="button" class="btn-sec"
+                  onclick="sauvegarderDepuisTextarea('home_history','home_team')">
+            💾 Sauvegarder
+          </button>
+        </div>
+        <textarea name="home_history" id="home_history" required
+                  placeholder="2026-01-15,Marseille,3,4,V,N,0,1.5,0.9,1.2,0.7"></textarea>
 
         <h2>4. Historique équipe extérieur (15 matchs à l'extérieur)</h2>
-        <textarea name="away_history" required placeholder="2026-01-15,Nice,2,2,N,V,0,1.0,1.2,0.8,0.9"></textarea>
+        <div class="barre-equipe">
+          <select id="select_away">
+            <option value="">— Choisir une équipe —</option>
+          </select>
+          <button type="button" class="btn-sec"
+                  onclick="remplirDepuisListe('away_history','select_away')">
+            📂 Charger
+          </button>
+          <button type="button" class="btn-sec"
+                  onclick="sauvegarderDepuisTextarea('away_history','away_team')">
+            💾 Sauvegarder
+          </button>
+        </div>
+        <textarea name="away_history" id="away_history" required
+                  placeholder="2026-01-15,Nice,2,2,N,V,0,1.0,1.2,0.8,0.9"></textarea>
 
         <h2>5. Cotes des marchés</h2>
         <h3>MC1</h3>
@@ -143,6 +183,53 @@ def nouveau():
 
         <button type="submit">Analyser le match</button>
       </form>
+    """, scripts="""
+      <script src="/static/equipes.js"></script>
+      <script>
+        document.addEventListener("DOMContentLoaded", function() {
+          peuplerSelect("select_home", "H");
+          peuplerSelect("select_away", "A");
+        });
+      </script>
+    """)
+
+
+@app.get("/equipes", response_class=HTMLResponse)
+def equipes():
+    return _page("Mes équipes", """
+      <h1>Mes équipes</h1>
+      <div class="card">
+        <div class="info">Ces équipes sont stockées dans <b>ce navigateur</b>.
+        Si tu changes de téléphone, exporte d'abord.</div>
+        <button type="button" class="btn-sec" onclick="exporterTout()">⬇️ Exporter tout</button>
+        <label style="margin-top:12px;">Importer un fichier JSON</label>
+        <input type="file" accept=".json" onchange="importerFichier(this)">
+      </div>
+      <div id="liste" style="margin-top:16px;"></div>
+      <p style="margin-top:20px;"><a href="/nouveau">← Nouvelle analyse</a></p>
+    """, scripts="""
+      <script src="/static/equipes.js"></script>
+      <script>
+        document.addEventListener("DOMContentLoaded", function() {
+          const equipes = lireEquipes();
+          const noms = Object.keys(equipes).sort();
+          const cible = document.getElementById("liste");
+          if (noms.length === 0) {
+            cible.innerHTML = '<p class="info">Aucune équipe sauvegardée pour le moment.</p>';
+            return;
+          }
+          let html = '<table><tr><th>Équipe</th><th>Lieu</th><th></th></tr>';
+          noms.forEach(n => {
+            const e = equipes[n];
+            html += '<tr><td>' + n + '</td><td>' + e.venue + '</td>'
+                 + '<td><button type="button" class="btn-sec" '
+                 + 'onclick="if(supprimerEquipe(\\'' + n.replace(/'/g, "\\\\'") + '\\')) location.reload();">'
+                 + '🗑️</button></td></tr>';
+          });
+          html += '</table>';
+          cible.innerHTML = html;
+        });
+      </script>
     """)
 
 
@@ -155,30 +242,22 @@ def _fmt_ev(x):
 
 
 def _rendre_ligne_pari(nom, cote_nom, c):
-    """Rend une ligne de tableau + les raisons du refus si non accepte."""
     label = cote_nom.upper()
     gate = c["gate"]
     couleur = "ok" if gate["accepte"] else "err"
     statut = "✅ RETENU" if gate["accepte"] else "❌ REFUSÉ"
-    p_est = c["p"]
-    p_imp = c["p_impl_prop"]
-    ev_med = c["ev_info"]["ev_mediane"]
-    ev_p20 = c["ev_info"]["ev_p20"]
-    kelly = c["kelly"]
-
     raisons_html = ""
     if not gate["accepte"] and gate["raisons_refus"]:
         items = "".join(f"<li>{r}</li>" for r in gate["raisons_refus"])
         raisons_html = f'<div class="raisons">Pourquoi ce refus ?<ul>{items}</ul></div>'
-
     return f"""
       <tr>
         <td><b>{label}</b></td>
-        <td>{_fmt_pct(p_est)}</td>
-        <td>{_fmt_pct(p_imp)}</td>
+        <td>{_fmt_pct(c['p'])}</td>
+        <td>{_fmt_pct(c['p_impl_prop'])}</td>
         <td>{c['cote']:.2f}</td>
-        <td>{_fmt_ev(ev_med)} / {_fmt_ev(ev_p20)}</td>
-        <td>{kelly*100:.2f}%</td>
+        <td>{_fmt_ev(c['ev_info']['ev_mediane'])} / {_fmt_ev(c['ev_info']['ev_p20'])}</td>
+        <td>{c['kelly']*100:.2f}%</td>
         <td class="{couleur}">{statut}</td>
       </tr>
       <tr><td colspan="7" style="padding:0; border:none;">{raisons_html}</td></tr>
@@ -186,13 +265,12 @@ def _rendre_ligne_pari(nom, cote_nom, c):
 
 
 def _rendre_marche(nom, info):
-    ligne = info["ligne"]
     rows = (
         _rendre_ligne_pari(nom, "over", info["cotes"]["over"])
         + _rendre_ligne_pari(nom, "under", info["cotes"]["under"])
     )
     return f"""
-      <h3>{nom} — ligne {ligne}</h3>
+      <h3>{nom} — ligne {info['ligne']}</h3>
       <p class="info">Marge bookmaker : {_fmt_pct(info['marge_totale'])}
          — écart méthodes : {_fmt_pct(info['ecart_methode_marge'])}</p>
       <table>
@@ -207,12 +285,8 @@ def _rendre_marche(nom, info):
 async def analyser(request: Request):
     form = await request.form()
     try:
-        hist_home = parser_historique(
-            form["home_history"], "H", form["home_team"], 15
-        )
-        hist_away = parser_historique(
-            form["away_history"], "A", form["away_team"], 15
-        )
+        hist_home = parser_historique(form["home_history"], "H", form["home_team"], 15)
+        hist_away = parser_historique(form["away_history"], "A", form["away_team"], 15)
         data = {
             "match": {
                 "competition": form["competition"].strip(),
@@ -257,11 +331,9 @@ async def analyser(request: Request):
     verdict = rapport["verdict"]
     ok = bool(rapport["selections_acceptees"])
     classe = "verdict-oui" if ok else "verdict-non"
-
     bloc_marches = "".join(
         _rendre_marche(nom, info) for nom, info in rapport["marches"].items()
     )
-
     stats = rapport["stats"]
     s_mc1 = stats["MC1"]; s_mc2 = stats["MC2"]; s_glo = stats["GLOBAL"]
 
@@ -302,12 +374,10 @@ async def analyser(request: Request):
         PageRank homogène : {'oui' if rapport['pagerank']['homogene'] else 'non'}
       </p>
 
-      <p style="margin-top:24px;">
-        <a href="/nouveau">← Nouvelle analyse</a>
-      </p>
+      <p style="margin-top:24px;"><a href="/nouveau">← Nouvelle analyse</a></p>
     """)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.4.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.5.0"}
