@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 5.1 : IC80 affiche sous chaque p estimee.
+Version 6.0 : effet score (cotes 1X2 utilisees pour ponderer la 2e MT).
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -11,7 +11,7 @@ from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.5.1")
+app = FastAPI(title="corners-pro", version="0.6.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -83,7 +83,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.5.1 — intervalles de crédibilité à 80 %</div>
+        <div class="info">Version 0.6.0 — effet score actif</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -112,6 +112,7 @@ def nouveau():
         </select>
 
         <h2>2. Cotes 1X2 du match</h2>
+        <div class="info">Ces cotes sont maintenant utilisées pour pondérer la 2e mi-temps.</div>
         <label>Cote Domicile</label>
         <input name="odd_home" type="number" step="0.01" min="1.01" required placeholder="2.10">
         <label>Cote Nul</label>
@@ -286,6 +287,45 @@ def _rendre_marche(nom, info):
     """
 
 
+def _rendre_effet_score(se):
+    if not se:
+        return ""
+    pf = se["probs_ft"]
+    hh = se["ht_home"]
+    ha = se["ht_away"]
+    ratios = se["ratios"]
+    sr = se.get("stats_ratios", {})
+    def _r(s):
+        if s in sr:
+            return f"{ratios[s]:.3f} (n={sr[s]['n']})"
+        return f"{ratios[s]:.3f}"
+    return f"""
+      <h2>Effet score (pondération 2e MT)</h2>
+      <p class="info">
+        Cotes 1X2 → probas fin de match (marge {_fmt_pct(pf['marge'])}) :<br>
+        Domicile {_fmt_pct(pf['p_home'])} | Nul {_fmt_pct(pf['p_draw'])} | Extérieur {_fmt_pct(pf['p_away'])}
+      </p>
+      <table>
+        <tr><th>Équipe</th><th>Mène HT</th><th>Nul HT</th><th>Menée HT</th><th>Facteur 2e MT</th></tr>
+        <tr><td>Domicile</td>
+            <td>{_fmt_pct(hh['p_leads_ht'])}</td>
+            <td>{_fmt_pct(hh['p_draw_ht'])}</td>
+            <td>{_fmt_pct(hh['p_trails_ht'])}</td>
+            <td><b>{se['facteur_home_2h']:.3f}</b></td></tr>
+        <tr><td>Extérieur</td>
+            <td>{_fmt_pct(ha['p_leads_ht'])}</td>
+            <td>{_fmt_pct(ha['p_draw_ht'])}</td>
+            <td>{_fmt_pct(ha['p_trails_ht'])}</td>
+            <td><b>{se['facteur_away_2h']:.3f}</b></td></tr>
+      </table>
+      <p class="info">
+        Ratios empiriques (2e MT selon scénario HT) :
+        mène {_r('V')} | nul {_r('N')} | menée {_r('D')}<br>
+        (borné dans [0.7, 1.5] avec shrinkage vers 1.0)
+      </p>
+    """
+
+
 @app.post("/analyser", response_class=HTMLResponse)
 async def analyser(request: Request):
     form = await request.form()
@@ -341,6 +381,7 @@ async def analyser(request: Request):
     )
     stats = rapport["stats"]
     s_mc1 = stats["MC1"]; s_mc2 = stats["MC2"]; s_glo = stats["GLOBAL"]
+    effet_score_html = _rendre_effet_score(rapport.get("score_effect"))
 
     return _page("Rapport", f"""
       <h1>Rapport</h1>
@@ -365,6 +406,8 @@ async def analyser(request: Request):
             <td>{stats['p_zero_GLOBAL']*100:.1f}%</td></tr>
       </table>
 
+      {effet_score_html}
+
       <h2>Détail par marché</h2>
       {bloc_marches}
 
@@ -385,4 +428,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.5.1"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.6.0"}
