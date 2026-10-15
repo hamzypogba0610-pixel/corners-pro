@@ -70,9 +70,9 @@ def parser_historique(texte, venue, equipe, lignes_attendues=15):
     return matchs
 
 
-def _build_pmf_par_equipe(hist):
+def _build_pmf_par_equipe(hist, demi_vie=8):
     """Construit la loi jointe A1 x A2 pour une equipe, avec copule."""
-    pmfs = build_pmf_equipe(hist)
+    pmfs = build_pmf_equipe(hist, demi_vie=demi_vie)
     a1 = pmfs["A1"]
     a2 = pmfs["A2"]
     c1h = [m["corners_1h"] for m in hist]
@@ -101,7 +101,7 @@ def analyser_match(data):
     hist_home = data["home_team_history"]
     hist_away = data["away_team_history"]
 
-    # ----- 1. Construction des lois par equipe -----
+    # ----- 1. Construction des lois par equipe (avec ponderation temporelle) -----
     joint_home, cop_home, pmfs_home = _build_pmf_par_equipe(hist_home)
     joint_away, cop_away, pmfs_away = _build_pmf_par_equipe(hist_away)
 
@@ -109,7 +109,7 @@ def analyser_match(data):
     mc2_pmf = product_pmf(joint_away)
     global_pmf = convolve(mc1_pmf, mc2_pmf)
 
-    # ----- 2. Statistiques descriptives (toutes les cles necessaires) -----
+    # ----- 2. Statistiques descriptives -----
     stats = {
         "MC1": moments(mc1_pmf),
         "MC2": moments(mc2_pmf),
@@ -153,8 +153,7 @@ def analyser_match(data):
         post_under = _distribution_posteriori(p_under_val)
         ev_under_info = ev_posterior(post_under, cote_under)
 
-        # Cartons rouges : on regarde UNIQUEMENT les 5 derniers matchs
-        # de CHAQUE equipe. Un rouge sur 30 matchs n'est pas un signal.
+        # Cartons rouges : uniquement sur les 5 derniers matchs de chaque equipe
         rouges_home_5 = sum(m["cartons_rouges"] for m in hist_home[:5])
         rouges_away_5 = sum(m["cartons_rouges"] for m in hist_away[:5])
         rouges_recents = max(rouges_home_5, rouges_away_5)
@@ -175,6 +174,7 @@ def analyser_match(data):
             "ev_p20": ev_over_info["ev_p20"],
             "spread_modeles": abs(pi_over_prop - pi_over_pow),
             "stable_sensibilite": True,
+            "ic80_largeur": ev_over_info["ic80_largeur"],
             "contexte": ctx,
         }
         analyse_under = {
@@ -184,6 +184,7 @@ def analyser_match(data):
             "ev_p20": ev_under_info["ev_p20"],
             "spread_modeles": abs(pi_under_prop - pi_under_pow),
             "stable_sensibilite": True,
+            "ic80_largeur": ev_under_info["ic80_largeur"],
             "contexte": ctx,
         }
         res_over = evaluer_selection(analyse_over)
@@ -245,4 +246,4 @@ def analyser_match(data):
         "copule_away": cop_away,
         "selections_acceptees": selections_acceptees,
         "verdict": verdict,
-}
+                              }
