@@ -1,9 +1,9 @@
 """
 Serveur web du bot corners-pro.
-Version 5 : sauvegarde locale des equipes (localStorage).
+Version 5.1 : IC80 affiche sous chaque p estimee.
 """
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import os
 
@@ -11,9 +11,8 @@ from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.5.0")
+app = FastAPI(title="corners-pro", version="0.5.1")
 
-# Servir les fichiers statiques (JS, CSS)
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -68,6 +67,7 @@ def _page(titre, corps, scripts=""):
     code {{ background:#21262d; padding:2px 6px; border-radius:4px; font-size:11px; }}
     .barre-equipe {{ margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }}
     .barre-equipe select {{ flex:1; min-width:150px; font-size:13px; padding:8px; }}
+    .ic80 {{ font-size:11px; color:#8b949e; }}
   </style>
 </head>
 <body>
@@ -83,7 +83,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.5.0 — sauvegarde des équipes</div>
+        <div class="info">Version 0.5.1 — intervalles de crédibilité à 80 %</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -246,6 +246,9 @@ def _rendre_ligne_pari(nom, cote_nom, c):
     gate = c["gate"]
     couleur = "ok" if gate["accepte"] else "err"
     statut = "✅ RETENU" if gate["accepte"] else "❌ REFUSÉ"
+    ev_info = c["ev_info"]
+    ic_bas = ev_info["ic80_bas"]
+    ic_haut = ev_info["ic80_haut"]
     raisons_html = ""
     if not gate["accepte"] and gate["raisons_refus"]:
         items = "".join(f"<li>{r}</li>" for r in gate["raisons_refus"])
@@ -253,10 +256,12 @@ def _rendre_ligne_pari(nom, cote_nom, c):
     return f"""
       <tr>
         <td><b>{label}</b></td>
-        <td>{_fmt_pct(c['p'])}</td>
+        <td>{_fmt_pct(c['p'])}<br>
+            <span class="ic80">[{ic_bas*100:.1f} – {ic_haut*100:.1f}]</span>
+        </td>
         <td>{_fmt_pct(c['p_impl_prop'])}</td>
         <td>{c['cote']:.2f}</td>
-        <td>{_fmt_ev(c['ev_info']['ev_mediane'])} / {_fmt_ev(c['ev_info']['ev_p20'])}</td>
+        <td>{_fmt_ev(ev_info['ev_mediane'])} / {_fmt_ev(ev_info['ev_p20'])}</td>
         <td>{c['kelly']*100:.2f}%</td>
         <td class="{couleur}">{statut}</td>
       </tr>
@@ -380,4 +385,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.5.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.5.1"}
