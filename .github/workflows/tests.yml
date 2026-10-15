@@ -26,3 +26,4 @@ jobs:
         run: |
           python test_product_law.py
           python test_schema.py
+          python test_descriptive.py
