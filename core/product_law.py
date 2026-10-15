@@ -99,7 +99,11 @@ def margin_removal_proportional(over_price, under_price):
 
 
 def margin_removal_power(over_price, under_price, tol=1e-8, max_iter=200):
-    """Retrait de marge par methode puissance (bissection sur k)."""
+    """
+    Retrait de marge par methode puissance (bissection sur k).
+    f(k) = (1/over)^k + (1/under)^k - 1 est DECROISSANTE en k.
+    Donc : si f > 0 -> k trop petit -> on remonte lo. Sinon on baisse hi.
+    """
     a, b = 1.0 / over_price, 1.0 / under_price
     lo, hi = 0.5, 3.0
     for _ in range(max_iter):
@@ -108,9 +112,9 @@ def margin_removal_power(over_price, under_price, tol=1e-8, max_iter=200):
         if abs(f) < tol:
             break
         if f > 0:
-            hi = mid
-        else:
             lo = mid
+        else:
+            hi = mid
     k = (lo + hi) / 2
     p_over = a ** k
     p_under = b ** k
