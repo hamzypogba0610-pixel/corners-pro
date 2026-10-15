@@ -23,4 +23,6 @@ jobs:
           pip install numpy scipy
 
       - name: Lancer les tests
-        run: python test_product_law.py
+        run: |
+          python test_product_law.py
+          python test_schema.py
