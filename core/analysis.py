@@ -1,7 +1,7 @@
 """
 Orchestrateur : de la saisie au verdict.
 Integre : ponderation temporelle, IC80, effet score, dependance inter-equipes,
-inflation de zeros.
+inflation de zeros, et test de sensibilite (tornade).
 """
 import numpy as np
 from data.schema import valider_match, ValidationError
@@ -17,8 +17,13 @@ from core.product_law import (
 )
 from core.pagerank import rapport_pagerank
 from core.score_effect import calculer_facteurs_match
+from core.sensitivity import SCENARIOS, perturber_hist
 from decision.ev import ev_posterior, kelly_prudent
 from decision.gate import evaluer_selection
+
+
+MARCHES = ("MC1", "MC2", "GLOBAL")
+COTES = ("over", "under")
 
 
 def parser_historique(texte, venue, equipe, lignes_attendues=15):
@@ -65,6 +70,14 @@ def parser_historique(texte, venue, equipe, lignes_attendues=15):
     return matchs
 
 
+def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
+    p_centre = max(1e-6, min(1 - 1e-6, p_centre))
+    a = p_centre * n_effectif
+    b = (1 - p_centre) * n_effectif
+    rng = np.random.default_rng(seed)
+    return rng.beta(a, b, n_samples)
+
+
 def _build_pmf_par_equipe(hist, facteur_2h=1.0, demi_vie=8):
     pmfs = build_pmf_equipe(hist, demi_vie=demi_vie, facteur_2h=facteur_2h)
     a1 = pmfs["A1"]; a2 = pmfs["A2"]
@@ -74,42 +87,55 @@ def _build_pmf_par_equipe(hist, facteur_2h=1.0, demi_vie=8):
     return joint, info_cop, pmfs
 
 
-def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
-    p_centre = max(1e-6, min(1 - 1e-6, p_centre))
-    a = p_centre * n_effectif
-    b = (1 - p_centre) * n_effectif
-    rng = np.random.default_rng(seed)
-    return rng.beta(a, b, n_samples)
+def _pipeline(data, params=None):
+    """
+    Pipeline complet avec parametres ajustables.
+    params : dict pouvant contenir :
+      - demi_vie : int (defaut 8)
+      - facteur_moyenne : float (defaut 1.0)
+      - retirer_extremes : int (defaut 0)
+      - rho_force : float ou None (defaut None = estimation)
+    """
+    params = params or {}
+    demi_vie = params.get("demi_vie", 8)
+    facteur_moyenne = params.get("facteur_moyenne", 1.0)
+    retirer_extremes = params.get("retirer_extremes", 0)
+    rho_force = params.get("rho_force", None)
 
+    hist_home_0 = data["home_team_history"]
+    hist_away_0 = data["away_team_history"]
 
-def analyser_match(data):
-    valider_match(data)
+    if facteur_moyenne != 1.0 or retirer_extremes > 0:
+        hist_home = perturber_hist(hist_home_0, facteur_moyenne, retirer_extremes)
+        hist_away = perturber_hist(hist_away_0, facteur_moyenne, retirer_extremes)
+    else:
+        hist_home = hist_home_0
+        hist_away = hist_away_0
 
-    hist_home = data["home_team_history"]
-    hist_away = data["away_team_history"]
-
-    # ----- 0. Effet score -----
-    score_info = calculer_facteurs_match(
-        hist_home, hist_away, data["odds_1x2"]
-    )
+    # Effet score (toujours sur l'historique original)
+    score_info = calculer_facteurs_match(hist_home_0, hist_away_0, data["odds_1x2"])
     f_home = score_info["facteur_home_2h"]
     f_away = score_info["facteur_away_2h"]
 
-    # ----- 1. Lois par equipe (avec inflation de zeros) -----
     joint_home, cop_home, pmfs_home = _build_pmf_par_equipe(
-        hist_home, facteur_2h=f_home
+        hist_home, facteur_2h=f_home, demi_vie=demi_vie
     )
     joint_away, cop_away, pmfs_away = _build_pmf_par_equipe(
-        hist_away, facteur_2h=f_away
+        hist_away, facteur_2h=f_away, demi_vie=demi_vie
     )
 
     mc1_pmf = product_pmf(joint_home)
     mc2_pmf = product_pmf(joint_away)
 
-    # ----- 2. Dependance inter-equipes -----
-    rho, n_rho, methode_rho = estimer_correlation_inter_equipes(
-        hist_home, hist_away
-    )
+    # Dependance inter-equipes
+    if rho_force is not None:
+        rho = float(rho_force)
+        methode_rho = "force"
+        n_rho = 0
+    else:
+        rho, n_rho, methode_rho = estimer_correlation_inter_equipes(
+            hist_home, hist_away
+        )
 
     m1_vec = np.zeros(max(mc1_pmf.keys()) + 1)
     m2_vec = np.zeros(max(mc2_pmf.keys()) + 1)
@@ -127,11 +153,9 @@ def analyser_match(data):
             "rho": rho, "tau": 0.0, "theta": 0.0,
             "independance_ok": True, "methode": "independance",
         }
-
     info_mc["n"] = n_rho
     info_mc["methode_estim"] = methode_rho
 
-    # ----- 3. Statistiques -----
     stats = {
         "MC1": moments(mc1_pmf),
         "MC2": moments(mc2_pmf),
@@ -145,7 +169,6 @@ def analyser_match(data):
                           data["match"]["home_team"],
                           data["match"]["away_team"])
 
-    # ----- 4. Analyse des marches -----
     marches = {}
     lignes = data["market_lines"]
     pmfs_marche = {"MC1": mc1_pmf, "MC2": mc2_pmf, "GLOBAL": global_pmf}
@@ -174,8 +197,8 @@ def analyser_match(data):
         post_under = _distribution_posteriori(p_under_val)
         ev_under_info = ev_posterior(post_under, cote_under)
 
-        rouges_home_5 = sum(m["cartons_rouges"] for m in hist_home[:5])
-        rouges_away_5 = sum(m["cartons_rouges"] for m in hist_away[:5])
+        rouges_home_5 = sum(m["cartons_rouges"] for m in hist_home_0[:5])
+        rouges_away_5 = sum(m["cartons_rouges"] for m in hist_away_0[:5])
         rouges_recents = max(rouges_home_5, rouges_away_5)
         freq_zero = zeros_marche[nom_marche]
 
@@ -192,7 +215,7 @@ def analyser_match(data):
             "p_implicite_sans_marge": pi_over_prop,
             "ev_p20": ev_over_info["ev_p20"],
             "spread_modeles": abs(pi_over_prop - pi_over_pow),
-            "stable_sensibilite": True,
+            "stable_sensibilite": True,  # provisoire, ajuste apres tornade
             "ic80_largeur": ev_over_info["ic80_largeur"],
             "contexte": ctx,
         }
@@ -239,21 +262,6 @@ def analyser_match(data):
             "ecart_methode_marge": abs(pi_over_prop - pi_over_pow),
         }
 
-    selections_acceptees = []
-    for nom_marche, info in marches.items():
-        for cote in ("over", "under"):
-            if info["cotes"][cote]["gate"]["accepte"]:
-                selections_acceptees.append(
-                    f"{nom_marche} {cote.upper()} {info['ligne']}"
-                )
-
-    verdict = (
-        "SELECTION : " + " | ".join(selections_acceptees)
-        if selections_acceptees
-        else "AUCUNE SELECTION SUFFISAMMENT SOLIDE POUR CE MARCHE."
-    )
-
-    # Info inflation de zeros (extraite des pmfs par equipe)
     zi_info = {
         "home_A1": pmfs_home["zero_inflation"]["A1"],
         "home_A2": pmfs_home["zero_inflation"]["A2"],
@@ -271,6 +279,76 @@ def analyser_match(data):
         "score_effect": score_info,
         "dependance_inter": info_mc,
         "zero_inflation": zi_info,
-        "selections_acceptees": selections_acceptees,
-        "verdict": verdict,
     }
+
+
+def _decision(rapport, marche, cote):
+    return "accept" if rapport["marches"][marche]["cotes"][cote]["gate"]["accepte"] else "reject"
+
+
+def _recompute_verdict(rapport):
+    sel = []
+    for m, info in rapport["marches"].items():
+        for c in COTES:
+            if info["cotes"][c]["gate"]["accepte"]:
+                sel.append(f"{m} {c.upper()} {info['ligne']}")
+    rapport["selections_acceptees"] = sel
+    rapport["verdict"] = (
+        "SELECTION : " + " | ".join(sel) if sel
+        else "AUCUNE SELECTION SUFFISAMMENT SOLIDE POUR CE MARCHE."
+    )
+
+
+def analyser_match(data):
+    valider_match(data)
+
+    base = _pipeline(data, {})
+
+    # Decisions de base
+    base_decisions = {
+        (m, c): _decision(base, m, c) for m in MARCHES for c in COTES
+    }
+
+    # --- Tornade ---
+    stabilite = {
+        (m, c): {"stable": True, "flips": [], "scenarios": []}
+        for m in MARCHES for c in COTES
+    }
+
+    for sc_nom, sc_params in SCENARIOS:
+        try:
+            r = _pipeline(data, sc_params)
+        except Exception as e:
+            continue
+        for m in MARCHES:
+            for c in COTES:
+                new_dec = _decision(r, m, c)
+                stabilite[(m, c)]["scenarios"].append({
+                    "nom": sc_nom,
+                    "decision": new_dec,
+                    "p": float(r["marches"][m]["cotes"][c]["p"]),
+                })
+                if new_dec != base_decisions[(m, c)]:
+                    stabilite[(m, c)]["stable"] = False
+                    stabilite[(m, c)]["flips"].append(sc_nom)
+
+    # --- Post-filtre : rejeter toute ligne instable ---
+    for m in MARCHES:
+        for c in COTES:
+            st = stabilite[(m, c)]
+            gate = base["marches"][m]["cotes"][c]["gate"]
+            if not st["stable"]:
+                if gate["accepte"]:
+                    gate["accepte"] = False
+                    gate["raisons_refus"].append(
+                        "Critère 5 — instabilité en sensibilité "
+                        "(flips : " + ", ".join(st["flips"]) + ")"
+                    )
+            else:
+                # Marquer explicitement comme stable dans le gate
+                if "Critère 5" not in " ".join(gate["raisons_refus"]):
+                    gate["stable_sensibilite"] = True
+
+    _recompute_verdict(base)
+    base["stabilite"] = stabilite
+    return base
