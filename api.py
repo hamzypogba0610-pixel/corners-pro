@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 3 : formulaire cable sur l'analyse complete.
+Version 4 : affiche les raisons du refus pour chaque ligne.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -8,7 +8,7 @@ from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.3.0")
+app = FastAPI(title="corners-pro", version="0.4.0")
 
 
 def _page(titre, corps):
@@ -51,6 +51,9 @@ def _page(titre, corps):
                 text-align:center; font-size:16px; font-weight:bold; }}
     .verdict-oui {{ background:#238636; color:white; }}
     .verdict-non {{ background:#30363d; color:#c9d1d9; }}
+    .raisons {{ background:#21262d; padding:10px; border-radius:6px;
+                margin-top:8px; font-size:12px; color:#d29922; }}
+    .raisons ul {{ margin:6px 0 0 16px; padding:0; }}
     code {{ background:#21262d; padding:2px 6px; border-radius:4px; font-size:11px; }}
   </style>
 </head>
@@ -66,7 +69,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.3.0 — analyse câblée</div>
+        <div class="info">Version 0.4.0 — rapport détaillé</div>
       </div>
       <p style="margin-top:24px;">
         <a href="/nouveau">→ Lancer une nouvelle analyse</a>
@@ -151,30 +154,43 @@ def _fmt_ev(x):
     return f"{x:+.4f}"
 
 
+def _rendre_ligne_pari(nom, cote_nom, c):
+    """Rend une ligne de tableau + les raisons du refus si non accepte."""
+    label = cote_nom.upper()
+    gate = c["gate"]
+    couleur = "ok" if gate["accepte"] else "err"
+    statut = "✅ RETENU" if gate["accepte"] else "❌ REFUSÉ"
+    p_est = c["p"]
+    p_imp = c["p_impl_prop"]
+    ev_med = c["ev_info"]["ev_mediane"]
+    ev_p20 = c["ev_info"]["ev_p20"]
+    kelly = c["kelly"]
+
+    raisons_html = ""
+    if not gate["accepte"] and gate["raisons_refus"]:
+        items = "".join(f"<li>{r}</li>" for r in gate["raisons_refus"])
+        raisons_html = f'<div class="raisons">Pourquoi ce refus ?<ul>{items}</ul></div>'
+
+    return f"""
+      <tr>
+        <td><b>{label}</b></td>
+        <td>{_fmt_pct(p_est)}</td>
+        <td>{_fmt_pct(p_imp)}</td>
+        <td>{c['cote']:.2f}</td>
+        <td>{_fmt_ev(ev_med)} / {_fmt_ev(ev_p20)}</td>
+        <td>{kelly*100:.2f}%</td>
+        <td class="{couleur}">{statut}</td>
+      </tr>
+      <tr><td colspan="7" style="padding:0; border:none;">{raisons_html}</td></tr>
+    """
+
+
 def _rendre_marche(nom, info):
     ligne = info["ligne"]
-    lignes = []
-    for cote_nom, label in (("over", "OVER"), ("under", "UNDER")):
-        c = info["cotes"][cote_nom]
-        gate = c["gate"]
-        couleur = "ok" if gate["accepte"] else "err"
-        statut = "✅ RETENU" if gate["accepte"] else "❌ REFUSÉ"
-        p_est = c["p"]
-        p_imp = c["p_impl_prop"]
-        ev_med = c["ev_info"]["ev_mediane"]
-        ev_p20 = c["ev_info"]["ev_p20"]
-        kelly = c["kelly"]
-        lignes.append(f"""
-          <tr>
-            <td>{label} {ligne}</td>
-            <td>{_fmt_pct(p_est)}</td>
-            <td>{_fmt_pct(p_imp)}</td>
-            <td>{c['cote']:.2f}</td>
-            <td>{_fmt_ev(ev_med)} / {_fmt_ev(ev_p20)}</td>
-            <td>{kelly*100:.2f}%</td>
-            <td class="{couleur}">{statut}</td>
-          </tr>
-        """)
+    rows = (
+        _rendre_ligne_pari(nom, "over", info["cotes"]["over"])
+        + _rendre_ligne_pari(nom, "under", info["cotes"]["under"])
+    )
     return f"""
       <h3>{nom} — ligne {ligne}</h3>
       <p class="info">Marge bookmaker : {_fmt_pct(info['marge_totale'])}
@@ -182,7 +198,7 @@ def _rendre_marche(nom, info):
       <table>
         <tr><th>Pari</th><th>p estimée</th><th>p implicite</th>
             <th>Cote</th><th>EV méd / p20</th><th>Kelly</th><th>Statut</th></tr>
-        {''.join(lignes)}
+        {rows}
       </table>
     """
 
@@ -269,7 +285,7 @@ async def analyser(request: Request):
             <td>{stats['p_zero_MC2']*100:.1f}%</td></tr>
         <tr><td>GLOBAL</td><td>{s_glo['mean']:.2f}</td><td>{s_glo['median']}</td>
             <td>{s_glo['q10']}</td><td>{s_glo['q90']}</td>
-            <td>—</td></tr>
+            <td>{stats['p_zero_GLOBAL']*100:.1f}%</td></tr>
       </table>
 
       <h2>Détail par marché</h2>
@@ -294,4 +310,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.3.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.4.0"}
