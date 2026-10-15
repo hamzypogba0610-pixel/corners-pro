@@ -8,25 +8,21 @@ from validation.backtest import (
 
 
 def test_dataset_structure():
-    ds = construire_dataset_synthetique(50)
-    assert len(ds) == 50
+    ds = construire_dataset_synthetique(80)
+    assert len(ds) == 80
     for m in ds:
         assert "home" in m and "away" in m
         assert "c1h_home" in m and "c1h_away" in m
         assert m["home"] != m["away"]
-    print(f"  OK : dataset 50 matchs, équipes distinctes")
+    print(f"  OK : dataset 80 matchs, équipes distinctes")
 
 
 def test_hist_chronologique():
-    """L'historique ne doit contenir QUE des matchs anterieurs."""
-    ds = construire_dataset_synthetique(50, seed=1)
+    ds = construire_dataset_synthetique(80, seed=1)
     k = 30
     equipe = ds[k]["home"]
     hist = _hist_depuis_dataset(ds, k, equipe, "H")
-    # Aucun match de hist ne doit avoir un indice >= k
-    for h in hist:
-        assert h["date"] <= ds[k]["date"] or True  # suffisant pour ce test
-    # Tous les matchs viennent d'avant k
+    assert len(hist) > 0, "Doit avoir au moins 1 match"
     assert len(hist) <= 15
     print(f"  OK : historique tronqué à {len(hist)} matchs")
 
@@ -39,7 +35,6 @@ def test_brier_score_parfait():
 
 
 def test_log_loss_extremes():
-    """log-loss explose si on est très confiant et qu'on a tort."""
     ll_bon = log_loss(0.9, 1.0)
     ll_mauvais = log_loss(0.01, 1.0)
     assert ll_mauvais > ll_bon
@@ -47,7 +42,6 @@ def test_log_loss_extremes():
 
 
 def test_rps_parfait():
-    """Si la pmf est concentrée sur la vraie valeur, RPS tend vers 0."""
     pmf = {5: 1.0}
     rps = rps_discret(pmf, 5, 10)
     assert rps == 0.0
@@ -63,40 +57,44 @@ def test_rps_penalise_erreur():
 
 
 def test_histogramme_pit_uniforme():
-    """Un PIT uniforme doit donner des counts reguliers."""
     rng = np.random.default_rng(42)
     pits = rng.uniform(0, 1, 500)
     h = histogramme_pit(pits, n_bins=10)
     assert h["n"] == 500
     assert len(h["counts"]) == 10
-    # Tous les counts doivent etre entre 30 et 70 (avec 500 points, attendu ~50)
-    assert all(25 <= c <= 75 for c in h["counts"]), f"counts={h['counts']}"
+    assert all(25 <= int(c) <= 75 for c in h["counts"]), f"counts={h['counts']}"
     print(f"  OK : PIT uniforme, counts={h['counts']}")
 
 
+def test_histogramme_pit_vide():
+    h = histogramme_pit([], n_bins=10)
+    assert h["n"] == 0
+    assert h["counts"] == []
+    print("  OK : PIT vide gere")
+
+
 def test_backtest_pipeline():
-    """Le backtest complet doit tourner et retourner des metriques."""
-    ds = construire_dataset_synthetique(50, seed=7)
+    ds = construire_dataset_synthetique(80, seed=7)
     r = executer_backtest(ds, ligne=12.5, k_min=25, marche="MC1")
-    # Au moins quelques predictions
-    assert r["n_pred"] > 0
-    # Brier entre 0 et 1
-    if r["brier"] is not None:
-        assert 0 <= r["brier"] <= 1
-    print(f"  OK : backtest n={r['n_pred']}, "
+    assert r["n_pred"] > 0, (
+        f"0 predictions (err_hist={r['n_erreurs_hist']}, "
+        f"err_calc={r['n_erreurs_calcul']})"
+    )
+    assert 0 <= r["brier"] <= 1
+    print(f"  OK : backtest MC1 n={r['n_pred']}, "
           f"Brier={r['brier']:.4f}, LogLoss={r['log_loss']:.4f}, "
           f"RPS={r['rps']:.4f}")
 
 
 def test_backtest_mc2():
-    ds = construire_dataset_synthetique(50, seed=8)
+    ds = construire_dataset_synthetique(80, seed=8)
     r = executer_backtest(ds, ligne=12.5, k_min=25, marche="MC2")
     assert r["n_pred"] > 0
     print(f"  OK : backtest MC2 n={r['n_pred']}, Brier={r['brier']:.4f}")
 
 
 def test_backtest_global():
-    ds = construire_dataset_synthetique(50, seed=9)
+    ds = construire_dataset_synthetique(80, seed=9)
     r = executer_backtest(ds, ligne=25.5, k_min=25, marche="GLOBAL")
     assert r["n_pred"] > 0
     print(f"  OK : backtest GLOBAL n={r['n_pred']}, Brier={r['brier']:.4f}")
@@ -111,6 +109,7 @@ if __name__ == "__main__":
         test_rps_parfait,
         test_rps_penalise_erreur,
         test_histogramme_pit_uniforme,
+        test_histogramme_pit_vide,
         test_backtest_pipeline,
         test_backtest_mc2,
         test_backtest_global,
