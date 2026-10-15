@@ -1,7 +1,7 @@
 """
 Orchestrateur : de la saisie au verdict.
-Integre : ponderation temporelle, IC80, effet score, dependance inter-equipes.
-Reference : MULTICORNER 360 v2, sections 4, 7, 8, 9, 10.
+Integre : ponderation temporelle, IC80, effet score, dependance inter-equipes,
+inflation de zeros.
 """
 import numpy as np
 from data.schema import valider_match, ValidationError
@@ -95,7 +95,7 @@ def analyser_match(data):
     f_home = score_info["facteur_home_2h"]
     f_away = score_info["facteur_away_2h"]
 
-    # ----- 1. Lois par equipe -----
+    # ----- 1. Lois par equipe (avec inflation de zeros) -----
     joint_home, cop_home, pmfs_home = _build_pmf_par_equipe(
         hist_home, facteur_2h=f_home
     )
@@ -106,12 +106,11 @@ def analyser_match(data):
     mc1_pmf = product_pmf(joint_home)
     mc2_pmf = product_pmf(joint_away)
 
-    # ----- 2. Dependance inter-equipes pour GLOBAL -----
+    # ----- 2. Dependance inter-equipes -----
     rho, n_rho, methode_rho = estimer_correlation_inter_equipes(
         hist_home, hist_away
     )
 
-    # Construire les vecteurs MC1, MC2 pour la copule
     m1_vec = np.zeros(max(mc1_pmf.keys()) + 1)
     m2_vec = np.zeros(max(mc2_pmf.keys()) + 1)
     for k, v in mc1_pmf.items():
@@ -132,7 +131,7 @@ def analyser_match(data):
     info_mc["n"] = n_rho
     info_mc["methode_estim"] = methode_rho
 
-    # ----- 3. Statistiques descriptives -----
+    # ----- 3. Statistiques -----
     stats = {
         "MC1": moments(mc1_pmf),
         "MC2": moments(mc2_pmf),
@@ -142,12 +141,11 @@ def analyser_match(data):
         "p_zero_GLOBAL": p_zero(global_pmf),
     }
 
-    # ----- 4. PageRank -----
     pr = rapport_pagerank(hist_home, hist_away,
                           data["match"]["home_team"],
                           data["match"]["away_team"])
 
-    # ----- 5. Analyse des marches -----
+    # ----- 4. Analyse des marches -----
     marches = {}
     lignes = data["market_lines"]
     pmfs_marche = {"MC1": mc1_pmf, "MC2": mc2_pmf, "GLOBAL": global_pmf}
@@ -255,6 +253,14 @@ def analyser_match(data):
         else "AUCUNE SELECTION SUFFISAMMENT SOLIDE POUR CE MARCHE."
     )
 
+    # Info inflation de zeros (extraite des pmfs par equipe)
+    zi_info = {
+        "home_A1": pmfs_home["zero_inflation"]["A1"],
+        "home_A2": pmfs_home["zero_inflation"]["A2"],
+        "away_A1": pmfs_away["zero_inflation"]["A1"],
+        "away_A2": pmfs_away["zero_inflation"]["A2"],
+    }
+
     return {
         "match": data["match"],
         "stats": stats,
@@ -264,6 +270,7 @@ def analyser_match(data):
         "copule_away": cop_away,
         "score_effect": score_info,
         "dependance_inter": info_mc,
+        "zero_inflation": zi_info,
         "selections_acceptees": selections_acceptees,
         "verdict": verdict,
     }
