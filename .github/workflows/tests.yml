@@ -29,3 +29,4 @@ jobs:
           python test_descriptive.py
           python test_hierarchical.py
           python test_xg_context.py
+          python test_copula.py
