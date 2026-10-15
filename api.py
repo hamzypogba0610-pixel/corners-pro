@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 7.0 : test de sensibilite (tornade).
+Version 8.0 : backtest glissant integre.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -9,9 +9,12 @@ import os
 
 from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
+from validation.backtest import (
+    construire_dataset_synthetique, executer_backtest, histogramme_pit,
+)
 
 
-app = FastAPI(title="corners-pro", version="0.7.0")
+app = FastAPI(title="corners-pro", version="0.8.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -83,10 +86,11 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.7.0 — test de sensibilité (tornade)</div>
+        <div class="info">Version 0.8.0 — backtest intégré</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
+      <p style="margin-top:8px;"><a href="/backtest">→ Lancer un backtest</a></p>
     """)
 
 
@@ -232,12 +236,104 @@ def equipes():
         });
       </script>
     """)
+
+
+@app.get("/backtest", response_class=HTMLResponse)
+def page_backtest():
+    try:
+        ds = construire_dataset_synthetique(n=80, seed=42)
+        r_mc1 = executer_backtest(ds, ligne=12.5, k_min=25, marche="MC1")
+        r_mc2 = executer_backtest(ds, ligne=12.5, k_min=25, marche="MC2")
+        r_glo = executer_backtest(ds, ligne=25.5, k_min=25, marche="GLOBAL")
+    except Exception as e:
+        return _page("Backtest — erreur", f"""
+          <h1 class="err">Erreur backtest</h1>
+          <div class="card"><pre>{type(e).__name__} : {e}</pre></div>
+          <p><a href="/">← Retour</a></p>
+        """)
+
+    def _bloc(nom, r):
+        if r["n_pred"] == 0:
+            return f"<tr><td>{nom}</td><td colspan='5'>Pas de prédictions</td></tr>"
+        brier_base = r["brier_baseline"]
+        brier = r["brier"]
+        gain = (brier_base - brier) / brier_base * 100 if brier_base else 0
+        couleur = "ok" if gain > 0 else "err"
+        return f"""
+          <tr>
+            <td>{nom}</td>
+            <td>{r['n_pred']}</td>
+            <td>{brier:.4f}</td>
+            <td>{brier_base:.4f}</td>
+            <td class="{couleur}">{gain:+.1f}%</td>
+            <td>{r['rps']:.4f}</td>
+          </tr>
+        """
+
+    h_pit = histogramme_pit(r_mc1["pit"], n_bins=10)
+    hist_html = _rendre_histogramme_pit(h_pit)
+
+    return _page("Backtest", f"""
+      <h1>Backtest glissant</h1>
+      <p class="info">
+        80 matchs simulés — pour chaque match à partir du 25e,
+        on utilise uniquement les matchs antérieurs pour prédire.<br>
+        <b>Aucune fuite d'information.</b>
+      </p>
+
+      <h2>Métriques principales</h2>
+      <table>
+        <tr><th>Marché</th><th>n</th><th>Brier</th><th>Brier baseline</th>
+            <th>Gain</th><th>RPS</th></tr>
+        {_bloc("MC1 (12.5)", r_mc1)}
+        {_bloc("MC2 (12.5)", r_mc2)}
+        {_bloc("GLOBAL (25.5)", r_glo)}
+      </table>
+
+      <h2>Histogramme PIT (MC1)</h2>
+      {hist_html}
+
+      <h2>Interprétation</h2>
+      <p class="info">
+        <b>Brier</b> : erreur quadratique (0 = parfait, 0.25 = hasard).<br>
+        <b>Gain</b> : amélioration par rapport au hasard (0.5 systématique).<br>
+        <b>RPS</b> : erreur sur toute la distribution (plus bas = mieux).<br>
+        <b>PIT</b> : si l'histogramme est plat, les probabilités sont bien calibrées.
+      </p>
+
+      <p style="margin-top:24px;"><a href="/">← Accueil</a></p>
+    """)
     def _fmt_pct(x):
         return f"{x*100:.2f}%"
 
 
 def _fmt_ev(x):
     return f"{x:+.4f}"
+
+
+def _rendre_histogramme_pit(h):
+    """Rendu d'un histogramme PIT en HTML (barres verticales)."""
+    if not h or h["n"] == 0:
+        return '<p class="info">Pas de données PIT.</p>'
+    counts = h["counts"]
+    cmax = max(counts) if counts else 1
+    barres = "".join(
+        f'<div style="flex:1; background:#58a6ff;'
+        f' height:{int(80 * c / cmax)}px;'
+        f' border-radius:2px 2px 0 0; min-height:2px;"'
+        f' title="{c}"></div>'
+        for c in counts
+    )
+    return f"""
+      <div style="display:flex; align-items:flex-end; gap:4px;
+                  height:90px; padding:6px; background:#21262d;
+                  border-radius:6px; margin-top:8px;">
+        {barres}
+      </div>
+      <p class="info">
+        n = {h['n']}. Barre plate = bonne calibration. Pic au centre = trop confiant.
+      </p>
+    """
 
 
 def _rendre_ligne_pari(nom, cote_nom, c):
@@ -528,4 +624,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.7.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.8.0"}
