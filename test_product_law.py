@@ -69,30 +69,13 @@ def test_poisson_ratio_proche_de_un():
 def test_marges_coherentes():
     po, pu, m1 = margin_removal_proportional(1.90, 1.90)
     po2, pu2, m2 = margin_removal_power(1.90, 1.90)
-    assert abs(po + pu - 1.0) < 1e-9
-    assert abs(po2 + pu2 - 1.0) < 1e-9
-    assert abs(po - po2) < 0.01
+    print(f"    proportional : po={po!r}  pu={pu!r}  somme={po + pu!r}")
+    print(f"    power        : po2={po2!r}  pu2={pu2!r}  somme={po2 + pu2!r}")
+    print(f"    |po - po2|   = {abs(po - po2)!r}")
+    if abs(po + pu - 1.0) >= 1e-9:
+        raise AssertionError(f"Somme proportional != 1 : {po + pu}")
+    if abs(po2 + pu2 - 1.0) >= 1e-9:
+        raise AssertionError(f"Somme power != 1 : {po2 + pu2}")
+    if abs(po - po2) >= 0.01:
+        raise AssertionError(f"Ecart trop grand : |{po} - {po2}| = {abs(po - po2)}")
     print("  OK : les deux methodes de marge sont coherentes")
-
-
-if __name__ == "__main__":
-    tests = [
-        test_pmf_somme_a_un,
-        test_regle_du_zero,
-        test_over_half_line,
-        test_ligne_entiere_refusee,
-        test_convolution,
-        test_poisson_ratio_proche_de_un,
-        test_marges_coherentes,
-    ]
-    print("=== Lancement des tests ===\n")
-    reussis = 0
-    for t in tests:
-        try:
-            t()
-            reussis += 1
-        except Exception as e:
-            print(f"  ECHEC : {t.__name__} -> {e}")
-    print(f"\n=== {reussis}/{len(tests)} tests reussis ===")
-    if reussis != len(tests):
-        raise SystemExit(1)
