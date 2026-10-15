@@ -1,12 +1,14 @@
 """
 Serveur web du bot corners-pro.
-Version 2 : formulaire de saisie (avec textareas CSV).
+Version 3 : formulaire cable sur l'analyse complete.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from data.schema import ValidationError
+from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.2.0")
+app = FastAPI(title="corners-pro", version="0.3.0")
 
 
 def _page(titre, corps):
@@ -23,6 +25,7 @@ def _page(titre, corps):
     h1 {{ color:#58a6ff; font-size:22px; }}
     h2 {{ color:#79c0ff; font-size:17px; margin-top:24px;
          border-bottom:1px solid #21262d; padding-bottom:6px; }}
+    h3 {{ color:#a5d6ff; font-size:15px; margin-top:18px; }}
     a {{ color:#58a6ff; }}
     label {{ display:block; margin:12px 0 4px; color:#8b949e; font-size:13px; }}
     input, select, textarea {{
@@ -31,17 +34,23 @@ def _page(titre, corps):
       font-family:inherit; font-size:15px;
     }}
     textarea {{ min-height:220px; font-family:monospace; font-size:12px; }}
-    button {{
-      margin-top:24px; width:100%; padding:14px;
+    button {{ margin-top:24px; width:100%; padding:14px;
       background:#238636; color:white; border:none;
-      border-radius:8px; font-size:16px; font-weight:bold;
-    }}
+      border-radius:8px; font-size:16px; font-weight:bold; }}
     button:active {{ background:#2ea043; }}
     .card {{ background:#161b22; border:1px solid #30363d; border-radius:10px;
              padding:14px; margin-top:12px; }}
     .ok {{ color:#3fb950; font-weight:bold; }}
-    .err {{ color:#f85149; }}
+    .warn {{ color:#d29922; font-weight:bold; }}
+    .err {{ color:#f85149; font-weight:bold; }}
     .info {{ color:#8b949e; font-size:13px; margin:6px 0; }}
+    table {{ width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }}
+    th, td {{ padding:8px; text-align:left; border-bottom:1px solid #21262d; }}
+    th {{ color:#8b949e; font-weight:normal; }}
+    .verdict {{ padding:16px; border-radius:10px; margin-top:16px;
+                text-align:center; font-size:16px; font-weight:bold; }}
+    .verdict-oui {{ background:#238636; color:white; }}
+    .verdict-non {{ background:#30363d; color:#c9d1d9; }}
     code {{ background:#21262d; padding:2px 6px; border-radius:4px; font-size:11px; }}
   </style>
 </head>
@@ -57,7 +66,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.2.0 — formulaire disponible</div>
+        <div class="info">Version 0.3.0 — analyse câblée</div>
       </div>
       <p style="margin-top:24px;">
         <a href="/nouveau">→ Lancer une nouvelle analyse</a>
@@ -94,41 +103,39 @@ def nouveau():
         <label>Cote Extérieur</label>
         <input name="odd_away" type="number" step="0.01" min="1.01" required placeholder="3.20">
 
-        <h2>3. Historique équipe domicile</h2>
+        <h2>3. Historique équipe domicile (15 matchs à domicile)</h2>
         <div class="info">
-          <b>15 matchs à domicile</b>, un par ligne. Format :<br>
           <code>date,adversaire,c1h,c2h,rf,rmt,rouge,xg,xga,xgot,xgota</code><br>
-          rf/rmt = V/N/D — rouge = 0/1/2 — xg = nombres décimaux
+          rf/rmt = V/N/D — rouge = 0/1/2 — xg = décimales (point)
         </div>
-        <textarea name="home_history" required placeholder="2026-01-15,Marseille,3,4,V,N,0,1.5,0.9,1.2,0.7
-2026-01-22,Lyon,2,3,D,N,1,1.1,1.4,0.8,1.0"></textarea>
+        <textarea name="home_history" required placeholder="2026-01-15,Marseille,3,4,V,N,0,1.5,0.9,1.2,0.7"></textarea>
 
-        <h2>4. Historique équipe extérieur</h2>
-        <div class="info">
-          <b>15 matchs à l'extérieur</b>, même format.
-        </div>
+        <h2>4. Historique équipe extérieur (15 matchs à l'extérieur)</h2>
         <textarea name="away_history" required placeholder="2026-01-15,Nice,2,2,N,V,0,1.0,1.2,0.8,0.9"></textarea>
 
         <h2>5. Cotes des marchés</h2>
-        <label>MC1 — ligne (ex: 12.5)</label>
+        <h3>MC1</h3>
+        <label>Ligne (ex 12.5)</label>
         <input name="mc1_line" type="number" step="0.5" required placeholder="12.5">
-        <label>MC1 — cote Over</label>
+        <label>Cote Over</label>
         <input name="mc1_over" type="number" step="0.01" min="1.01" required placeholder="1.90">
-        <label>MC1 — cote Under</label>
+        <label>Cote Under</label>
         <input name="mc1_under" type="number" step="0.01" min="1.01" required placeholder="1.90">
 
-        <label>MC2 — ligne</label>
+        <h3>MC2</h3>
+        <label>Ligne</label>
         <input name="mc2_line" type="number" step="0.5" required placeholder="12.5">
-        <label>MC2 — cote Over</label>
+        <label>Cote Over</label>
         <input name="mc2_over" type="number" step="0.01" min="1.01" required placeholder="1.85">
-        <label>MC2 — cote Under</label>
+        <label>Cote Under</label>
         <input name="mc2_under" type="number" step="0.01" min="1.01" required placeholder="1.95">
 
-        <label>GLOBAL — ligne</label>
+        <h3>GLOBAL</h3>
+        <label>Ligne</label>
         <input name="glo_line" type="number" step="0.5" required placeholder="25.5">
-        <label>GLOBAL — cote Over</label>
+        <label>Cote Over</label>
         <input name="glo_over" type="number" step="0.01" min="1.01" required placeholder="1.88">
-        <label>GLOBAL — cote Under</label>
+        <label>Cote Under</label>
         <input name="glo_under" type="number" step="0.01" min="1.01" required placeholder="1.92">
 
         <button type="submit">Analyser le match</button>
@@ -136,27 +143,155 @@ def nouveau():
     """)
 
 
+def _fmt_pct(x):
+    return f"{x*100:.2f}%"
+
+
+def _fmt_ev(x):
+    return f"{x:+.4f}"
+
+
+def _rendre_marche(nom, info):
+    ligne = info["ligne"]
+    lignes = []
+    for cote_nom, label in (("over", "OVER"), ("under", "UNDER")):
+        c = info["cotes"][cote_nom]
+        gate = c["gate"]
+        couleur = "ok" if gate["accepte"] else "err"
+        statut = "✅ RETENU" if gate["accepte"] else "❌ REFUSÉ"
+        p_est = c["p"]
+        p_imp = c["p_impl_prop"]
+        ev_med = c["ev_info"]["ev_mediane"]
+        ev_p20 = c["ev_info"]["ev_p20"]
+        kelly = c["kelly"]
+        lignes.append(f"""
+          <tr>
+            <td>{label} {ligne}</td>
+            <td>{_fmt_pct(p_est)}</td>
+            <td>{_fmt_pct(p_imp)}</td>
+            <td>{c['cote']:.2f}</td>
+            <td>{_fmt_ev(ev_med)} / {_fmt_ev(ev_p20)}</td>
+            <td>{kelly*100:.2f}%</td>
+            <td class="{couleur}">{statut}</td>
+          </tr>
+        """)
+    return f"""
+      <h3>{nom} — ligne {ligne}</h3>
+      <p class="info">Marge bookmaker : {_fmt_pct(info['marge_totale'])}
+         — écart méthodes : {_fmt_pct(info['ecart_methode_marge'])}</p>
+      <table>
+        <tr><th>Pari</th><th>p estimée</th><th>p implicite</th>
+            <th>Cote</th><th>EV méd / p20</th><th>Kelly</th><th>Statut</th></tr>
+        {''.join(lignes)}
+      </table>
+    """
+
+
 @app.post("/analyser", response_class=HTMLResponse)
 async def analyser(request: Request):
     form = await request.form()
-    lignes = "".join(
-        f"<tr><td style='padding:6px; border-bottom:1px solid #21262d;'>{k}</td>"
-        f"<td style='padding:6px; border-bottom:1px solid #21262d;'>"
-        f"<code>{(v[:100] + '...') if isinstance(v, str) and len(v) > 100 else v}</code>"
-        f"</td></tr>"
-        for k, v in form.items()
+    try:
+        hist_home = parser_historique(
+            form["home_history"], "H", form["home_team"], 15
+        )
+        hist_away = parser_historique(
+            form["away_history"], "A", form["away_team"], 15
+        )
+        data = {
+            "match": {
+                "competition": form["competition"].strip(),
+                "home_team": form["home_team"].strip(),
+                "away_team": form["away_team"].strip(),
+                "date": form["date"].strip(),
+                "mode": form["mode"],
+            },
+            "home_team_history": hist_home,
+            "away_team_history": hist_away,
+            "market_lines": {
+                "MC1": {"line": float(form["mc1_line"]),
+                        "over": float(form["mc1_over"]),
+                        "under": float(form["mc1_under"])},
+                "MC2": {"line": float(form["mc2_line"]),
+                        "over": float(form["mc2_over"]),
+                        "under": float(form["mc2_under"])},
+                "GLOBAL": {"line": float(form["glo_line"]),
+                           "over": float(form["glo_over"]),
+                           "under": float(form["glo_under"])},
+            },
+            "odds_1x2": {
+                "home": float(form["odd_home"]),
+                "draw": float(form["odd_draw"]),
+                "away": float(form["odd_away"]),
+            },
+        }
+        rapport = analyser_match(data)
+    except ValidationError as e:
+        return _page("Erreur de saisie", f"""
+          <h1 class="err">Erreur de saisie</h1>
+          <div class="card"><pre>{e}</pre></div>
+          <p style="margin-top:20px;"><a href="/nouveau">← Corriger</a></p>
+        """)
+    except Exception as e:
+        return _page("Erreur interne", f"""
+          <h1 class="err">Erreur interne</h1>
+          <div class="card"><pre>{type(e).__name__} : {e}</pre></div>
+          <p style="margin-top:20px;"><a href="/nouveau">← Retour</a></p>
+        """)
+
+    verdict = rapport["verdict"]
+    ok = bool(rapport["selections_acceptees"])
+    classe = "verdict-oui" if ok else "verdict-non"
+
+    bloc_marches = "".join(
+        _rendre_marche(nom, info) for nom, info in rapport["marches"].items()
     )
-    return _page("Reçu", f"""
-      <h1>Données reçues</h1>
-      <p class="ok">✓ Le formulaire a bien été soumis.</p>
-      <p class="info">On câblera l'analyse à l'étape suivante.</p>
-      <table style="width:100%; margin-top:16px; font-size:12px; border-collapse:collapse;">
-        {lignes}
+
+    stats = rapport["stats"]
+    s_mc1 = stats["MC1"]; s_mc2 = stats["MC2"]; s_glo = stats["GLOBAL"]
+
+    return _page("Rapport", f"""
+      <h1>Rapport</h1>
+      <p class="info">
+        {rapport['match']['home_team']} vs {rapport['match']['away_team']}
+        — {rapport['match']['date']} — {rapport['match']['competition']}
+      </p>
+      <div class="verdict {classe}">{verdict}</div>
+
+      <h2>Statistiques du modèle</h2>
+      <table>
+        <tr><th>Marché</th><th>Moyenne</th><th>Médiane</th>
+            <th>Q10</th><th>Q90</th><th>P(zéro)</th></tr>
+        <tr><td>MC1</td><td>{s_mc1['mean']:.2f}</td><td>{s_mc1['median']}</td>
+            <td>{s_mc1['q10']}</td><td>{s_mc1['q90']}</td>
+            <td>{stats['p_zero_MC1']*100:.1f}%</td></tr>
+        <tr><td>MC2</td><td>{s_mc2['mean']:.2f}</td><td>{s_mc2['median']}</td>
+            <td>{s_mc2['q10']}</td><td>{s_mc2['q90']}</td>
+            <td>{stats['p_zero_MC2']*100:.1f}%</td></tr>
+        <tr><td>GLOBAL</td><td>{s_glo['mean']:.2f}</td><td>{s_glo['median']}</td>
+            <td>{s_glo['q10']}</td><td>{s_glo['q90']}</td>
+            <td>—</td></tr>
       </table>
-      <p style="margin-top:20px;"><a href="/nouveau">← Retour au formulaire</a></p>
+
+      <h2>Détail par marché</h2>
+      {bloc_marches}
+
+      <h2>Contexte</h2>
+      <p class="info">
+        Dépendance A1/A2 domicile :
+        τ = {rapport['copule_home']['tau']:.3f}, θ = {rapport['copule_home']['theta']:.3f}
+        ({'indépendance retenue' if rapport['copule_home']['independance_ok'] else 'dépendance détectée'})<br>
+        Dépendance A1/A2 extérieur :
+        τ = {rapport['copule_away']['tau']:.3f}, θ = {rapport['copule_away']['theta']:.3f}
+        ({'indépendance retenue' if rapport['copule_away']['independance_ok'] else 'dépendance détectée'})<br>
+        PageRank homogène : {'oui' if rapport['pagerank']['homogene'] else 'non'}
+      </p>
+
+      <p style="margin-top:24px;">
+        <a href="/nouveau">← Nouvelle analyse</a>
+      </p>
     """)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.3.0"}
