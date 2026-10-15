@@ -1,11 +1,12 @@
 """
-Modele hierarchique gamma-Poisson avec ponderation temporelle
-et effet score (facteur 2e MT).
+Modele hierarchique gamma-Poisson avec ponderation temporelle,
+effet score 2e MT, et inflation de zeros.
 Reference : MULTICORNER 360 v2, section 4.
 """
 import numpy as np
 from scipy.stats import nbinom
 from core.product_law import product_pmf, normalize
+from core.zero_inflation import tester_inflation, pmf_zinb
 
 
 KMAX_MIN = 20
@@ -80,12 +81,11 @@ def _km(hist, cle):
     return max(max(vals) + KMAX_MARGE, KMAX_MIN)
 
 
-def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0):
+def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0,
+                     utiliser_zinb=True):
     """
-    PMF de A1 et A2 avec shrinkage, ponderation temporelle, et facteur
-    d'effet score sur la 2e MT.
-    NOTE : on multiplie alpha (pas beta) par le facteur. Cela preserve
-    le ratio var/moy (forme de la distribution) tout en decalant la moyenne.
+    PMF de A1 et A2 avec shrinkage, ponderation temporelle, effet score,
+    et inflation de zeros optionnelle.
     """
     a1 = [m["corners_1h"] for m in hist]
     a2 = [m["corners_2h"] for m in hist]
@@ -98,15 +98,28 @@ def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0):
 
     aa1, bb1 = posterior_alpha_beta(a1, alpha0, beta0, poids=w)
     aa2, bb2 = posterior_alpha_beta(a2, alpha0, beta0, poids=w)
-
-    # Effet score : decalage multiplicatif de la moyenne 2e MT
     aa2_ajuste = aa2 * float(facteur_2h)
 
     km1 = _km(hist, "corners_1h")
     km2 = _km(hist, "corners_2h")
 
-    pmf_a1 = nb_pmf(km1, aa1, bb1)
-    pmf_a2 = nb_pmf(km2, aa2_ajuste, bb2)
+    # --- Inflation de zeros ---
+    info_z1 = {"inflation": False, "pi": 0.0, "raison": "desactive"}
+    info_z2 = {"inflation": False, "pi": 0.0, "raison": "desactive"}
+    if utiliser_zinb:
+        info_z1 = tester_inflation(a1, aa1, bb1)
+        info_z2 = tester_inflation(a2, aa2_ajuste, bb2)
+        if info_z1["inflation"]:
+            pmf_a1 = pmf_zinb(km1, aa1, bb1, info_z1["pi"])
+        else:
+            pmf_a1 = nb_pmf(km1, aa1, bb1)
+        if info_z2["inflation"]:
+            pmf_a2 = pmf_zinb(km2, aa2_ajuste, bb2, info_z2["pi"])
+        else:
+            pmf_a2 = nb_pmf(km2, aa2_ajuste, bb2)
+    else:
+        pmf_a1 = nb_pmf(km1, aa1, bb1)
+        pmf_a2 = nb_pmf(km2, aa2_ajuste, bb2)
 
     return {
         "A1": pmf_a1,
@@ -114,6 +127,7 @@ def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0):
         "poids": w,
         "demi_vie": demi_vie,
         "facteur_2h": float(facteur_2h),
+        "zero_inflation": {"A1": info_z1, "A2": info_z2},
         "alpha_beta": {
             "prior": (alpha0, beta0),
             "posterior_A1": (aa1, bb1),
@@ -129,12 +143,15 @@ def build_joint(pmf_a1, pmf_a2):
 
 
 def build_mc_global(hist_home, hist_away, demi_vie=DEMI_VIE_DEFAUT,
-                    facteur_home_2h=1.0, facteur_away_2h=1.0):
+                    facteur_home_2h=1.0, facteur_away_2h=1.0,
+                    utiliser_zinb=True):
     from core.product_law import convolve
     home = build_pmf_equipe(hist_home, demi_vie=demi_vie,
-                            facteur_2h=facteur_home_2h)
+                            facteur_2h=facteur_home_2h,
+                            utiliser_zinb=utiliser_zinb)
     away = build_pmf_equipe(hist_away, demi_vie=demi_vie,
-                            facteur_2h=facteur_away_2h)
+                            facteur_2h=facteur_away_2h,
+                            utiliser_zinb=utiliser_zinb)
     joint_home = build_joint(home["A1"], home["A2"])
     joint_away = build_joint(away["A1"], away["A2"])
     mc1_pmf = product_pmf(joint_home)
@@ -144,4 +161,4 @@ def build_mc_global(hist_home, hist_away, demi_vie=DEMI_VIE_DEFAUT,
         "home": home, "away": away,
         "joint_home": joint_home, "joint_away": joint_away,
         "mc1_pmf": mc1_pmf, "mc2_pmf": mc2_pmf, "global_pmf": global_pmf,
-        }
+    }
