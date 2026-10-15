@@ -32,3 +32,4 @@ jobs:
           python test_copula.py
           python test_pagerank.py
           python test_decision.py
+          python test_score_effect.py
