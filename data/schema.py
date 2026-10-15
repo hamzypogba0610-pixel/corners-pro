@@ -1,7 +1,7 @@
 """
 Schema de validation des donnees saisies par l'utilisateur.
-Version 2 : ajoute resultat_final, resultat_mt, cartons_rouges.
-Reference : MULTICORNER 360 v2, section 2.
+Version 3 : ajoute xg_pour, xg_contre, xgot_pour, xgot_contre.
+Reference : MULTICORNER 360 v2, sections 2 et 4.
 """
 import re
 from datetime import datetime
@@ -32,6 +32,13 @@ def _check_date(s, champ):
 def _check_entier_positif(v, champ):
     if isinstance(v, bool) or not isinstance(v, int):
         raise ValidationError(f"{champ} : doit etre un entier, recu {v!r}")
+    if v < 0:
+        raise ValidationError(f"{champ} : ne peut pas etre negatif ({v})")
+
+
+def _check_float_positif(v, champ):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ValidationError(f"{champ} : doit etre un nombre, recu {v!r}")
     if v < 0:
         raise ValidationError(f"{champ} : ne peut pas etre negatif ({v})")
 
@@ -69,6 +76,11 @@ def _check_history(hist, champ, venue_attendu, n=N_MATCHS_REQUIS):
         _check_resultat(m.get("resultat_final"), f"{prefix}.resultat_final")
         _check_resultat(m.get("resultat_mt"), f"{prefix}.resultat_mt")
         _check_entier_positif(m.get("cartons_rouges"), f"{prefix}.cartons_rouges")
+        # xG / xGoT : nombres decimaux positifs
+        _check_float_positif(m.get("xg_pour"), f"{prefix}.xg_pour")
+        _check_float_positif(m.get("xg_contre"), f"{prefix}.xg_contre")
+        _check_float_positif(m.get("xgot_pour"), f"{prefix}.xgot_pour")
+        _check_float_positif(m.get("xgot_contre"), f"{prefix}.xgot_contre")
 
 
 def _check_lines(lines, champ):
@@ -110,10 +122,7 @@ def _check_odds_1x2(odds, champ):
 
 
 def valider_match(data):
-    """
-    Valide un dict complet de match.
-    Leve ValidationError si invalide. Retourne True si tout est bon.
-    """
+    """Valide un dict complet de match. Leve ValidationError si invalide."""
     if not isinstance(data, dict):
         raise ValidationError("Les donnees doivent etre un objet JSON")
     if "match" not in data:
