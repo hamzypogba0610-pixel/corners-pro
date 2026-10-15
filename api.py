@@ -233,7 +233,7 @@ def equipes():
       </script>
     """)
     def _fmt_pct(x):
-    return f"{x*100:.2f}%"
+        return f"{x*100:.2f}%"
 
 
 def _fmt_ev(x):
