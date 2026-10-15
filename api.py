@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 6.2 : inflation de zeros.
+Version 7.0 : test de sensibilite (tornade).
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -11,7 +11,7 @@ from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.6.2")
+app = FastAPI(title="corners-pro", version="0.7.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -83,7 +83,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.6.2 — inflation de zéros</div>
+        <div class="info">Version 0.7.0 — test de sensibilité (tornade)</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -232,9 +232,7 @@ def equipes():
         });
       </script>
     """)
-
-
-def _fmt_pct(x):
+    def _fmt_pct(x):
     return f"{x*100:.2f}%"
 
 
@@ -387,6 +385,38 @@ def _rendre_zero_inflation(zi):
     """
 
 
+def _rendre_tornade(stabilite):
+    if not stabilite:
+        return ""
+    rows = []
+    for (m, c), info in stabilite.items():
+        stable = info["stable"]
+        badge = ('<span class="ok">STABLE</span>' if stable
+                 else '<span class="err">FRAGILE</span>')
+        flips = (", ".join(info["flips"]) if info["flips"] else "—")
+        rows.append(f"""
+          <tr>
+            <td>{m} {c.upper()}</td>
+            <td>{badge}</td>
+            <td>{len(info['scenarios'])}</td>
+            <td style="font-size:11px;">{flips}</td>
+          </tr>
+        """)
+    return f"""
+      <h2>Test de sensibilité (tornade)</h2>
+      <p class="info">
+        7 scénarios testés : moyenne ±15 %, demi-vie 6/10,
+        indépendance forcée, dépendance forte, retrait extrêmes.
+        Une ligne qui change de décision dans <b>au moins un</b> scénario
+        est marquée <span class="err">FRAGILE</span> et rejetée (critère 5).
+      </p>
+      <table>
+        <tr><th>Ligne</th><th>Stabilité</th><th>Scénarios</th><th>Flips</th></tr>
+        {''.join(rows)}
+      </table>
+    """
+
+
 @app.post("/analyser", response_class=HTMLResponse)
 async def analyser(request: Request):
     form = await request.form()
@@ -445,6 +475,7 @@ async def analyser(request: Request):
     effet_score_html = _rendre_effet_score(rapport.get("score_effect"))
     dependance_html = _rendre_dependance_inter(rapport.get("dependance_inter"))
     zi_html = _rendre_zero_inflation(rapport.get("zero_inflation"))
+    tornade_html = _rendre_tornade(rapport.get("stabilite"))
 
     return _page("Rapport", f"""
       <h1>Rapport</h1>
@@ -475,6 +506,8 @@ async def analyser(request: Request):
 
       {zi_html}
 
+      {tornade_html}
+
       <h2>Détail par marché</h2>
       {bloc_marches}
 
@@ -495,4 +528,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.6.2"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.7.0"}
