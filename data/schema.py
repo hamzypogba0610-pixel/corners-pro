@@ -1,6 +1,6 @@
 """
 Schema de validation des donnees saisies par l'utilisateur.
-Refuse toute donnee pourrie avant qu'elle n'entre dans le bot.
+Version 2 : ajoute resultat_final, resultat_mt, cartons_rouges.
 Reference : MULTICORNER 360 v2, section 2.
 """
 import re
@@ -10,6 +10,7 @@ from datetime import datetime
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MARKETS_OK = ("MC1", "MC2", "GLOBAL")
 N_MATCHS_REQUIS = 15
+RESULTATS_OK = ("V", "N", "D")
 
 
 class ValidationError(Exception):
@@ -40,6 +41,13 @@ def _check_non_vide(s, champ):
         raise ValidationError(f"{champ} : ne peut pas etre vide")
 
 
+def _check_resultat(v, champ):
+    if v not in RESULTATS_OK:
+        raise ValidationError(
+            f"{champ} : doit etre 'V', 'N' ou 'D', recu {v!r}"
+        )
+
+
 def _check_history(hist, champ, venue_attendu, n=N_MATCHS_REQUIS):
     if not isinstance(hist, list):
         raise ValidationError(f"{champ} : doit etre une liste")
@@ -58,6 +66,9 @@ def _check_history(hist, champ, venue_attendu, n=N_MATCHS_REQUIS):
             )
         _check_entier_positif(m.get("corners_1h"), f"{prefix}.corners_1h")
         _check_entier_positif(m.get("corners_2h"), f"{prefix}.corners_2h")
+        _check_resultat(m.get("resultat_final"), f"{prefix}.resultat_final")
+        _check_resultat(m.get("resultat_mt"), f"{prefix}.resultat_mt")
+        _check_entier_positif(m.get("cartons_rouges"), f"{prefix}.cartons_rouges")
 
 
 def _check_lines(lines, champ):
@@ -86,6 +97,18 @@ def _check_lines(lines, champ):
             )
 
 
+def _check_odds_1x2(odds, champ):
+    if not isinstance(odds, dict):
+        raise ValidationError(f"{champ} : doit etre un objet")
+    for k in ("home", "draw", "away"):
+        if k not in odds:
+            raise ValidationError(f"{champ} : champ '{k}' manquant")
+        if not isinstance(odds[k], (int, float)) or odds[k] <= 1.0:
+            raise ValidationError(
+                f"{champ}.{k} doit etre > 1 (recu {odds[k]!r})"
+            )
+
+
 def valider_match(data):
     """
     Valide un dict complet de match.
@@ -110,4 +133,5 @@ def valider_match(data):
     _check_history(data.get("away_team_history"), "away_team_history", "A")
 
     _check_lines(data.get("market_lines"), "market_lines")
+    _check_odds_1x2(data.get("odds_1x2"), "odds_1x2")
     return True
