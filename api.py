@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 6.1 : dependance inter-equipes MC1 <-> MC2.
+Version 6.2 : inflation de zeros.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -11,7 +11,7 @@ from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.6.1")
+app = FastAPI(title="corners-pro", version="0.6.2")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -83,7 +83,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.6.1 — dépendance inter-équipes MC1 ↔ MC2</div>
+        <div class="info">Version 0.6.2 — inflation de zéros</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -112,7 +112,7 @@ def nouveau():
         </select>
 
         <h2>2. Cotes 1X2 du match</h2>
-        <div class="info">Ces cotes sont utilisées pour pondérer la 2e mi-temps (effet score).</div>
+        <div class="info">Utilisées pour pondérer la 2e mi-temps (effet score).</div>
         <label>Cote Domicile</label>
         <input name="odd_home" type="number" step="0.01" min="1.01" required placeholder="2.10">
         <label>Cote Nul</label>
@@ -320,8 +320,7 @@ def _rendre_effet_score(se):
       </table>
       <p class="info">
         Ratios empiriques (2e MT selon scénario HT) :
-        mène {_r('V')} | nul {_r('N')} | menée {_r('D')}<br>
-        (borné dans [0.7, 1.5] avec shrinkage vers 1.0)
+        mène {_r('V')} | nul {_r('N')} | menée {_r('D')}
       </p>
     """
 
@@ -347,12 +346,44 @@ def _rendre_dependance_inter(dep):
         <b>ρ (Pearson)</b> = {rho:.3f} | τ (Kendall) = {tau:.3f} | θ (copule) = {theta:.3f}<br>
         Seuil d'activation : |ρ| ≥ 0.10 — {statut}
       </p>
+    """
+
+
+def _rendre_zero_inflation(zi):
+    if not zi:
+        return ""
+    def _bloc(label, info):
+        if not info:
+            return ""
+        inflation = info.get("inflation", False)
+        statut = (
+            '<span class="warn">inflation détectée</span>' if inflation
+            else '<span class="info">pas d\'inflation</span>'
+        )
+        return f"""
+          <tr>
+            <td>{label}</td>
+            <td>{info.get('p_zero_obs', 0.0)*100:.1f}%</td>
+            <td>{info.get('p_zero_nb', 0.0)*100:.1f}%</td>
+            <td>{info.get('ecart', 0.0)*100:+.2f} pts</td>
+            <td>{info.get('pi', 0.0):.3f}</td>
+            <td>{statut}</td>
+          </tr>
+        """
+    return f"""
+      <h2>Inflation de zéros</h2>
       <p class="info">
-        Si dépendance détectée, la loi de GLOBAL utilise une copule de Frank
-        au lieu de la convolution pure. Cela capture le fait que les deux
-        équipes ont tendance à faire leurs corners dans les mêmes matchs
-        (matchs ouverts) ou peu (matchs fermés).
+        Test : P(0) observé vs P(0) attendu sous NB. Si l'écart dépasse 5 pts
+        (avec shrinkage), on bascule sur ZINB (zero-inflated NB).
       </p>
+      <table>
+        <tr><th>Ligne</th><th>P(0) observé</th><th>P(0) NB</th>
+            <th>Écart</th><th>π (ajusté)</th><th>Statut</th></tr>
+        {_bloc("Domicile — 1re MT", zi.get("home_A1"))}
+        {_bloc("Domicile — 2e MT", zi.get("home_A2"))}
+        {_bloc("Extérieur — 1re MT", zi.get("away_A1"))}
+        {_bloc("Extérieur — 2e MT", zi.get("away_A2"))}
+      </table>
     """
 
 
@@ -413,6 +444,7 @@ async def analyser(request: Request):
     s_mc1 = stats["MC1"]; s_mc2 = stats["MC2"]; s_glo = stats["GLOBAL"]
     effet_score_html = _rendre_effet_score(rapport.get("score_effect"))
     dependance_html = _rendre_dependance_inter(rapport.get("dependance_inter"))
+    zi_html = _rendre_zero_inflation(rapport.get("zero_inflation"))
 
     return _page("Rapport", f"""
       <h1>Rapport</h1>
@@ -441,6 +473,8 @@ async def analyser(request: Request):
 
       {dependance_html}
 
+      {zi_html}
+
       <h2>Détail par marché</h2>
       {bloc_marches}
 
@@ -461,4 +495,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.6.1"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.6.2"}
