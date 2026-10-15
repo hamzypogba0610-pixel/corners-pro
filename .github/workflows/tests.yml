@@ -31,3 +31,4 @@ jobs:
           python test_xg_context.py
           python test_copula.py
           python test_pagerank.py
+          python test_decision.py
