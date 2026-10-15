@@ -153,13 +153,16 @@ def analyser_match(data):
         post_under = _distribution_posteriori(p_under_val)
         ev_under_info = ev_posterior(post_under, cote_under)
 
-        cartons_rouges_total = sum(
-            m["cartons_rouges"] for m in hist_home + hist_away
-        )
+        # Cartons rouges : on regarde UNIQUEMENT les 5 derniers matchs
+        # de CHAQUE equipe. Un rouge sur 30 matchs n'est pas un signal.
+        rouges_home_5 = sum(m["cartons_rouges"] for m in hist_home[:5])
+        rouges_away_5 = sum(m["cartons_rouges"] for m in hist_away[:5])
+        rouges_recents = max(rouges_home_5, rouges_away_5)
+
         freq_zero = zeros_marche[nom_marche]
 
         ctx = {
-            "cartons_rouges_recents": min(cartons_rouges_total, 5),
+            "cartons_rouges_recents": rouges_recents,
             "freq_zero_mc": freq_zero,
             "pagerank_homogene": pr["homogene"],
             "cote_min": min(cote_over, cote_under),
