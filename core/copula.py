@@ -1,6 +1,6 @@
 """
-Copule de Frank pour modeliser la dependance entre 1re et 2e mi-temps.
-Estimation du parametre theta par inversion du tau de Kendall.
+Copule de Frank pour la dependance entre mi-temps (A1/A2)
+et entre equipes (MC1/MC2).
 Reference : MULTICORNER 360 v2, section 4, point 4.
 """
 import numpy as np
@@ -11,14 +11,10 @@ from core.product_law import normalize
 
 THETA_MIN = -30.0
 THETA_MAX = 30.0
-TAU_SEUIL = 0.05  # en dessous, on considere l'independance
+TAU_SEUIL = 0.05
 
 
 def _C_frank(u, v, theta):
-    """
-    Fonction copule de Frank : C(u, v; theta).
-    Gere u ou v = 0 ou 1, et theta proche de 0.
-    """
     if u <= 0.0 or v <= 0.0:
         return 0.0
     if u >= 1.0:
@@ -40,20 +36,18 @@ def _C_frank(u, v, theta):
 
 def pmf_joint_frank(pmf_x, pmf_y, theta):
     """
-    Loi jointe P(X=x, Y=y) a partir des marginales et d'une copule de Frank.
-    Formule des differences finies :
-      P(X=x, Y=y) = C(F(x), G(y)) - C(F(x-1), G(y))
-                    - C(F(x), G(y-1)) + C(F(x-1), G(y-1))
+    Loi jointe P(X=x, Y=y) via copule de Frank.
+    Differences finies sur la fonction copule.
     """
     px = np.asarray(pmf_x, dtype=float)
     py = np.asarray(pmf_y, dtype=float)
     px = px / px.sum()
     py = py / py.sum()
 
-    fx = np.cumsum(px)  # CDF marginale de X
-    fy = np.cumsum(py)  # CDF marginale de Y
-    fx_prev = np.concatenate([[0.0], fx[:-1]])  # F_X(x-1)
-    fy_prev = np.concatenate([[0.0], fy[:-1]])  # F_Y(y-1)
+    fx = np.cumsum(px)
+    fy = np.cumsum(py)
+    fx_prev = np.concatenate([[0.0], fx[:-1]])
+    fy_prev = np.concatenate([[0.0], fy[:-1]])
 
     nx = len(px); ny = len(py)
     joint = np.zeros((nx, ny))
@@ -67,12 +61,11 @@ def pmf_joint_frank(pmf_x, pmf_y, theta):
                 - _C_frank(u1, v0, theta)
                 + _C_frank(u0, v0, theta)
             )
-    joint = np.clip(joint, 0.0, None)  # corrige les petits negatifs numeriques
+    joint = np.clip(joint, 0.0, None)
     return normalize(joint)
 
 
 def _D1_debye(theta):
-    """Premiere fonction de Debye : D1(theta) = (1/theta) * int_0^theta t/(e^t-1) dt."""
     if abs(theta) < 1e-8:
         return 1.0
     f = lambda t: t / (np.exp(t) - 1.0) if abs(t) > 1e-12 else 1.0
@@ -81,17 +74,12 @@ def _D1_debye(theta):
 
 
 def tau_from_theta(theta):
-    """Tau de Kendall theorique pour une copule de Frank de parametre theta."""
     if abs(theta) < 1e-8:
         return 0.0
     return float(1.0 - 4.0 / theta + 4.0 / theta * _D1_debye(theta))
 
 
 def theta_from_tau(tau):
-    """
-    Inverse tau -> theta par bissection sur [-30, 30].
-    Monotone croissant.
-    """
     if tau <= tau_from_theta(THETA_MIN):
         return THETA_MIN
     if tau >= tau_from_theta(THETA_MAX):
@@ -108,11 +96,6 @@ def theta_from_tau(tau):
 
 
 def estimer_theta(x_obs, y_obs):
-    """
-    Estime theta a partir des observations brutes.
-    Utilise tau-b (gere les ex-aequo) puis inversion.
-    Retourne (theta, tau_obs, independance_ok).
-    """
     x = np.asarray(x_obs, dtype=float)
     y = np.asarray(y_obs, dtype=float)
     if len(x) < 4:
@@ -128,13 +111,91 @@ def estimer_theta(x_obs, y_obs):
 
 
 def joint_avec_copule(pmf_x, pmf_y, x_obs, y_obs):
-    """
-    Construit la joint en estimant theta sur les observations.
-    Si la dependance n'est pas distinguable de zero, retourne l'independance.
-    """
+    """Joint 2D via copule estimee sur les observations."""
     theta, tau, indep_ok = estimer_theta(x_obs, y_obs)
     if indep_ok:
         joint = normalize(np.outer(pmf_x, pmf_y))
     else:
         joint = pmf_joint_frank(pmf_x, pmf_y, theta)
     return joint, {"theta": theta, "tau": tau, "independance_ok": indep_ok}
+
+
+# ---------------------------------------------------------------------------
+# CORRELATION INTER-EQUIPES (proxy via xg_contre)
+# ---------------------------------------------------------------------------
+
+RHO_SEUIL = 0.10
+
+
+def rho_vers_tau_gaussien(rho):
+    """
+    Conversion rho Pearson -> tau Kendall sous copule gaussienne.
+    Formule classique : tau = (2/pi) * arcsin(rho).
+    """
+    rho = max(-0.999, min(0.999, float(rho)))
+    return float(2.0 / np.pi * np.arcsin(rho))
+
+
+def estimer_correlation_inter_equipes(hist_home, hist_away):
+    """
+    Estime la correlation inter-equipes.
+    Proxy : corr(corners_totaux_de_l_equipe, xg_contre_de_l_equipe).
+    Un xg_contre eleve = adversaire offensif = potentiellement
+    beaucoup de corners des deux cotes.
+    Combine les deux historiques pour plus de donnees.
+    Retourne (rho, n, methode).
+    """
+    c_tot = []
+    xg_c = []
+    for m in hist_home + hist_away:
+        c_tot.append(m["corners_1h"] + m["corners_2h"])
+        xg_c.append(m["xg_contre"])
+    c_arr = np.array(c_tot, dtype=float)
+    x_arr = np.array(xg_c, dtype=float)
+    if len(c_arr) < 10:
+        return 0.0, len(c_arr), "trop peu de donnees"
+    if np.std(c_arr) == 0 or np.std(x_arr) == 0:
+        return 0.0, len(c_arr), "variance nulle"
+    rho = float(np.corrcoef(c_arr, x_arr)[0, 1])
+    if np.isnan(rho):
+        return 0.0, len(c_arr), "calcul impossible"
+    return rho, len(c_arr), "pearson"
+
+
+def joint_mc_via_copule(mc1_pmf, mc2_pmf, rho):
+    """
+    Construit la loi jointe de (MC1, MC2) via une copule de Frank
+    calibree sur rho.
+    Si |rho| < RHO_SEUIL, retourne l'independance pure.
+    Retourne (joint_2d, info).
+    """
+    if abs(rho) < RHO_SEUIL:
+        joint = normalize(np.outer(mc1_pmf, mc2_pmf))
+        return joint, {
+            "rho": rho, "tau": 0.0, "theta": 0.0,
+            "independance_ok": True, "methode": "independance",
+        }
+    tau = rho_vers_tau_gaussien(rho)
+    theta = theta_from_tau(tau)
+    joint = pmf_joint_frank(mc1_pmf, mc2_pmf, theta)
+    return joint, {
+        "rho": rho, "tau": tau, "theta": theta,
+        "independance_ok": False, "methode": "copule_frank",
+    }
+
+
+def global_depuis_joint_mc(joint_2d):
+    """
+    Loi de GLOBAL = MC1 + MC2 a partir de la loi jointe 2D.
+    C'est la convolution ponderee par la dependance.
+    """
+    nx, ny = joint_2d.shape
+    global_pmf = {}
+    for i in range(nx):
+        for j in range(ny):
+            s = i + j
+            global_pmf[s] = global_pmf.get(s, 0.0) + float(joint_2d[i, j])
+    total = sum(global_pmf.values())
+    if total <= 0:
+        raise ValueError("Loi globale vide.")
+    return {k: v / total for k, v in global_pmf.items()}
