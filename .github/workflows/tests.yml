@@ -27,3 +27,4 @@ jobs:
           python test_product_law.py
           python test_schema.py
           python test_descriptive.py
+          python test_hierarchical.py
