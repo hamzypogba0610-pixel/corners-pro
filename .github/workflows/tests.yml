@@ -35,3 +35,4 @@ jobs:
           python test_score_effect.py
           python test_zero_inflation.py
           python test_sensitivity.py
+          python test_backtest.py
