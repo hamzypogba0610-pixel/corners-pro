@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 6.0 : effet score (cotes 1X2 utilisees pour ponderer la 2e MT).
+Version 6.1 : dependance inter-equipes MC1 <-> MC2.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -11,7 +11,7 @@ from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
 
 
-app = FastAPI(title="corners-pro", version="0.6.0")
+app = FastAPI(title="corners-pro", version="0.6.1")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -83,7 +83,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.6.0 — effet score actif</div>
+        <div class="info">Version 0.6.1 — dépendance inter-équipes MC1 ↔ MC2</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -112,7 +112,7 @@ def nouveau():
         </select>
 
         <h2>2. Cotes 1X2 du match</h2>
-        <div class="info">Ces cotes sont maintenant utilisées pour pondérer la 2e mi-temps.</div>
+        <div class="info">Ces cotes sont utilisées pour pondérer la 2e mi-temps (effet score).</div>
         <label>Cote Domicile</label>
         <input name="odd_home" type="number" step="0.01" min="1.01" required placeholder="2.10">
         <label>Cote Nul</label>
@@ -326,6 +326,36 @@ def _rendre_effet_score(se):
     """
 
 
+def _rendre_dependance_inter(dep):
+    if not dep:
+        return ""
+    rho = dep.get("rho", 0.0)
+    tau = dep.get("tau", 0.0)
+    theta = dep.get("theta", 0.0)
+    n = dep.get("n", 0)
+    indep = dep.get("independance_ok", True)
+    methode = dep.get("methode_estim", "")
+    if indep:
+        statut = '<span class="info">indépendance retenue</span>'
+    else:
+        statut = '<span class="warn">dépendance détectée</span>'
+    return f"""
+      <h2>Dépendance inter-équipes (MC1 ↔ MC2)</h2>
+      <p class="info">
+        Proxy utilisé : corr(corners totaux équipe, xG concédés).<br>
+        Estimation sur {n} matchs — méthode : {methode}<br>
+        <b>ρ (Pearson)</b> = {rho:.3f} | τ (Kendall) = {tau:.3f} | θ (copule) = {theta:.3f}<br>
+        Seuil d'activation : |ρ| ≥ 0.10 — {statut}
+      </p>
+      <p class="info">
+        Si dépendance détectée, la loi de GLOBAL utilise une copule de Frank
+        au lieu de la convolution pure. Cela capture le fait que les deux
+        équipes ont tendance à faire leurs corners dans les mêmes matchs
+        (matchs ouverts) ou peu (matchs fermés).
+      </p>
+    """
+
+
 @app.post("/analyser", response_class=HTMLResponse)
 async def analyser(request: Request):
     form = await request.form()
@@ -382,6 +412,7 @@ async def analyser(request: Request):
     stats = rapport["stats"]
     s_mc1 = stats["MC1"]; s_mc2 = stats["MC2"]; s_glo = stats["GLOBAL"]
     effet_score_html = _rendre_effet_score(rapport.get("score_effect"))
+    dependance_html = _rendre_dependance_inter(rapport.get("dependance_inter"))
 
     return _page("Rapport", f"""
       <h1>Rapport</h1>
@@ -408,6 +439,8 @@ async def analyser(request: Request):
 
       {effet_score_html}
 
+      {dependance_html}
+
       <h2>Détail par marché</h2>
       {bloc_marches}
 
@@ -428,4 +461,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.6.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.6.1"}
