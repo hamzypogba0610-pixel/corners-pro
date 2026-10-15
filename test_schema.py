@@ -1,5 +1,5 @@
 """
-Tests du gardien de donnees (data/schema.py) - version 2.
+Tests du gardien de donnees (data/schema.py) - version 3 (avec xG).
 """
 from data.schema import valider_match, ValidationError
 
@@ -8,7 +8,9 @@ def _hist(venue="H"):
     return [
         {"date": f"2026-01-{i+1:02d}", "opponent": f"Team{i}",
          "venue": venue, "corners_1h": 3, "corners_2h": 4,
-         "resultat_final": "V", "resultat_mt": "N", "cartons_rouges": 0}
+         "resultat_final": "V", "resultat_mt": "N", "cartons_rouges": 0,
+         "xg_pour": 1.5, "xg_contre": 0.9,
+         "xgot_pour": 1.2, "xgot_contre": 0.7}
         for i in range(15)
     ]
 
@@ -150,6 +152,38 @@ def test_odds_1x2_invalide():
         print("  OK : cote 1X2 <= 1 refusee")
 
 
+def test_xg_manquant():
+    d = match_bidon_ok(); del d["home_team_history"][0]["xg_pour"]
+    try:
+        valider_match(d); raise AssertionError("Devrait refuser")
+    except ValidationError:
+        print("  OK : xg_pour manquant refuse")
+
+
+def test_xg_negatif():
+    d = match_bidon_ok(); d["home_team_history"][4]["xg_contre"] = -0.3
+    try:
+        valider_match(d); raise AssertionError("Devrait refuser")
+    except ValidationError:
+        print("  OK : xg negatif refuse")
+
+
+def test_xgot_non_numerique():
+    d = match_bidon_ok(); d["home_team_history"][2]["xgot_pour"] = "abc"
+    try:
+        valider_match(d); raise AssertionError("Devrait refuser")
+    except ValidationError:
+        print("  OK : xgot non numerique refuse")
+
+
+def test_xgot_contre_manquant():
+    d = match_bidon_ok(); del d["away_team_history"][7]["xgot_contre"]
+    try:
+        valider_match(d); raise AssertionError("Devrait refuser")
+    except ValidationError:
+        print("  OK : xgot_contre manquant refuse")
+
+
 if __name__ == "__main__":
     tests = [
         test_valide_ok, test_date_manquante, test_date_mal_formee,
@@ -159,8 +193,10 @@ if __name__ == "__main__":
         test_resultat_invalide, test_resultat_mt_manquant,
         test_cartons_rouges_negatif, test_odds_1x2_manquant,
         test_odds_1x2_invalide,
+        test_xg_manquant, test_xg_negatif,
+        test_xgot_non_numerique, test_xgot_contre_manquant,
     ]
-    print("=== Tests du gardien v2 ===\n")
+    print("=== Tests du gardien v3 (avec xG) ===\n")
     r = 0
     for t in tests:
         try:
