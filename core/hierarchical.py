@@ -1,7 +1,6 @@
 """
-Modele hierarchique gamma-Poisson (binomiale negative conjuguee).
-Estime les intensites par equipe et par mi-temps avec shrinkage
-vers la moyenne de ligue. Genere la loi jointe P(X=x, Y=y).
+Modele hierarchique gamma-Poisson avec ponderation temporelle.
+Les matchs recents pesent plus lourd (demi-vie en nombre de matchs).
 Reference : MULTICORNER 360 v2, section 4.
 """
 import numpy as np
@@ -11,60 +10,90 @@ from core.product_law import product_pmf, normalize
 
 KMAX_MIN = 20
 KMAX_MARGE = 5
+DEMI_VIE_DEFAUT = 8  # en nombre de matchs
 
 
-def estimate_alpha_beta(valeurs):
+def poids_temporels(hist, demi_vie=DEMI_VIE_DEFAUT):
     """
-    Methode des moments sur la NB marginale :
+    Calcule un poids pour chaque match, base sur son age.
+    Le match le plus RECENT a le poids le plus eleve (proche de 1).
+    Formule : poids = 2^(-age / demi_vie).
+    Le tri se fait par date (ordre croissant = ancien -> recent).
+    Retourne un array de poids dans l'ordre ORIGINAL de hist.
+    """
+    n = len(hist)
+    if n == 0:
+        return np.array([])
+    if n == 1:
+        return np.array([1.0])
+
+    # Trier par date pour trouver l'age relatif
+    indices = sorted(range(n), key=lambda i: hist[i]["date"])
+    # indices[0] = plus ancien, indices[-1] = plus recent
+    # age = position depuis le plus recent (0 pour le plus recent)
+    age_par_idx = {}
+    for pos, idx in enumerate(indices):
+        age_par_idx[idx] = (n - 1) - pos  # 0 pour le plus recent
+
+    poids = np.array([
+        2.0 ** (-age_par_idx[i] / float(demi_vie))
+        for i in range(n)
+    ])
+    return poids
+
+
+def estimate_alpha_beta(valeurs, poids=None):
+    """
+    Methode des moments PONDEREE sur la NB marginale :
       mu = alpha / beta
       var = mu + mu^2 / alpha
-    => alpha = mu^2 / (var - mu), beta = mu / var_shrunk... (voir code)
-    Retourne (alpha, beta). Si var <= mu, on renvoie une borne prudente.
+    => alpha = mu^2 / (var - mu), beta = mu / (var - mu)
     """
     v = np.array(valeurs, dtype=float)
     if v.size == 0:
         raise ValueError("Liste vide.")
-    mu = float(np.mean(v))
-    var = float(np.var(v, ddof=0))
+    if poids is None:
+        w = np.ones_like(v)
+    else:
+        w = np.asarray(poids, dtype=float)
+        if len(w) != len(v):
+            raise ValueError("poids et valeurs de tailles differentes")
+    sw = float(np.sum(w))
+    if sw <= 0:
+        raise ValueError("Somme des poids nulle.")
+
+    mu = float(np.sum(w * v) / sw)
+    var = float(np.sum(w * (v - mu) ** 2) / sw)
+
     if mu <= 0:
         return 1e-6, 1.0
     if var <= mu * 1.0001:
-        # Sous-dispersion : on force une dispersion minimale pour eviter
-        # un alpha infini (ce qui reviendrait a Poisson pur).
+        # Sous-dispersion : on impose une dispersion minimale
         var = mu * 1.5
-    alpha = mu * mu / (var - mu)
-    beta = mu / (var - mu) * mu  # beta = mu / (var - mu) * mu -> coherent
-    beta = mu / (var - mu) * 1.0
-    beta = 1.0 / (var - mu) * mu  # simplification : beta = mu / (var - mu) ? Non.
-    # Reprenons proprement :
-    # mu = alpha/beta ; var = mu + mu^2/alpha
-    # => alpha = mu^2 / (var - mu)
-    # => beta = alpha / mu = mu / (var - mu)
     alpha = mu * mu / (var - mu)
     beta = mu / (var - mu)
     return float(max(alpha, 1e-6)), float(max(beta, 1e-9))
 
 
-def posterior_alpha_beta(valeurs, alpha0, beta0):
+def posterior_alpha_beta(valeurs, alpha0, beta0, poids=None):
     """
-    Posterior conjugue gamma-Poisson.
+    Posterior conjugue gamma-Poisson PONDERE.
     Prior : lambda ~ Gamma(alpha0, beta0)
-    Observations : x_1..x_n ~ Poisson(lambda)
-    Posterior : Gamma(alpha0 + sum x, beta0 + n)
+    Observations ponderees : x_1..x_n de poids w_i
+    Posterior : Gamma(alpha0 + sum(w_i * x_i), beta0 + sum(w_i))
     """
     v = np.array(valeurs, dtype=float)
-    n = v.size
-    s = float(np.sum(v))
-    return float(alpha0 + s), float(beta0 + n)
+    if poids is None:
+        w = np.ones_like(v)
+    else:
+        w = np.asarray(poids, dtype=float)
+    s_p = float(np.sum(w * v))
+    s_w = float(np.sum(w))
+    return float(alpha0 + s_p), float(beta0 + s_w)
 
 
 def nb_pmf(k_max, alpha, beta):
-    """
-    Loi binomiale negative predictive (marginale apres integration du lambda).
-    P(X = k) = C(k + alpha - 1, k) * (beta/(beta+1))^alpha * (1/(beta+1))^k
-    Formule scipy : nbinom.pmf(k, n=alpha, p=beta/(beta+1))
-    Retourne un vecteur np de taille k_max+1, normalise.
-    """
+    """Loi binomiale negative predictive, normalisee."""
     p = beta / (beta + 1.0)
     ks = np.arange(k_max + 1)
     pmf = nbinom.pmf(ks, alpha, p)
@@ -80,22 +109,24 @@ def _km(hist, cle):
     return max(max(vals) + KMAX_MARGE, KMAX_MIN)
 
 
-def build_pmf_equipe(hist):
+def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT):
     """
-    Construit les PMF de A1 (1re MT) et A2 (2e MT) avec shrinkage.
-    Retourne un dict {A1: pmf, A2: pmf, alpha_beta: {...}}.
+    Construit les PMF de A1 et A2 avec shrinkage et ponderation temporelle.
+    Retourne dict {A1: pmf, A2: pmf, alpha_beta: {...}, poids: array}.
     """
     a1 = [m["corners_1h"] for m in hist]
     a2 = [m["corners_2h"] for m in hist]
 
-    # Ligue locale = union des deux series (pour estimer un prior commun)
-    ligue = a1 + a2
-    alpha0, beta0 = estimate_alpha_beta(ligue)
+    w = poids_temporels(hist, demi_vie=demi_vie)
 
-    # Posterior par equipe sur ses propres observations (ici = hist)
-    # On traite chaque mi-temps separement mais avec le meme prior
-    aa1, bb1 = posterior_alpha_beta(a1, alpha0, beta0)
-    aa2, bb2 = posterior_alpha_beta(a2, alpha0, beta0)
+    # Ligue locale : on pondere aussi par les poids temporels
+    ligue = a1 + a2
+    poids_ligue = np.concatenate([w, w])
+    alpha0, beta0 = estimate_alpha_beta(ligue, poids=poids_ligue)
+
+    # Posterior par equipe, pondere
+    aa1, bb1 = posterior_alpha_beta(a1, alpha0, beta0, poids=w)
+    aa2, bb2 = posterior_alpha_beta(a2, alpha0, beta0, poids=w)
 
     km1 = _km(hist, "corners_1h")
     km2 = _km(hist, "corners_2h")
@@ -106,6 +137,8 @@ def build_pmf_equipe(hist):
     return {
         "A1": pmf_a1,
         "A2": pmf_a2,
+        "poids": w,
+        "demi_vie": demi_vie,
         "alpha_beta": {
             "prior": (alpha0, beta0),
             "posterior_A1": (aa1, bb1),
@@ -115,31 +148,19 @@ def build_pmf_equipe(hist):
 
 
 def build_joint(pmf_a1, pmf_a2):
-    """
-    Loi jointe P(X, Y) sous independance (a tester plus tard par copule).
-    Matrice (len(pmf_a1), len(pmf_a2)).
-    """
-    k1 = len(pmf_a1)
-    k2 = len(pmf_a2)
-    # On tronque/pad a une taille commune pour la matrice
-    kmax1 = k1 - 1
-    kmax2 = k2 - 1
+    """Loi jointe P(X, Y) sous independance (test de copule plus tard)."""
     joint = np.outer(pmf_a1, pmf_a2)
     return normalize(joint)
 
 
-def build_mc_global(hist_home, hist_away):
+def build_mc_global(hist_home, hist_away, demi_vie=DEMI_VIE_DEFAUT):
     """
-    Pipeline complet pour un match :
-    1. PMF A1, A2 pour equipe domicile -> joint -> loi de MC1 = A1*A2
-    2. Idem equipe exterieur -> MC2
-    3. Convolution -> GLOBAL (sous independance MC1/MC2)
-    Retourne dict avec mc1_pmf, mc2_pmf, global_pmf, et les PMF intermediaires.
+    Pipeline complet pour un match.
     """
     from core.product_law import convolve
 
-    home = build_pmf_equipe(hist_home)
-    away = build_pmf_equipe(hist_away)
+    home = build_pmf_equipe(hist_home, demi_vie=demi_vie)
+    away = build_pmf_equipe(hist_away, demi_vie=demi_vie)
 
     joint_home = build_joint(home["A1"], home["A2"])
     joint_away = build_joint(away["A1"], away["A2"])
@@ -156,4 +177,4 @@ def build_mc_global(hist_home, hist_away):
         "mc1_pmf": mc1_pmf,
         "mc2_pmf": mc2_pmf,
         "global_pmf": global_pmf,
-  }
+    }
