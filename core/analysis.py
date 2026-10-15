@@ -1,12 +1,15 @@
 """
 Orchestrateur : de la saisie au verdict.
-Integre : ponderation temporelle, IC80, effet score.
+Integre : ponderation temporelle, IC80, effet score, dependance inter-equipes.
 Reference : MULTICORNER 360 v2, sections 4, 7, 8, 9, 10.
 """
 import numpy as np
 from data.schema import valider_match, ValidationError
 from core.hierarchical import build_pmf_equipe
-from core.copula import joint_avec_copule
+from core.copula import (
+    joint_avec_copule, estimer_correlation_inter_equipes,
+    joint_mc_via_copule, global_depuis_joint_mc,
+)
 from core.product_law import (
     product_pmf, convolve, p_over, p_under,
     moments, p_zero, margin_removal_proportional,
@@ -16,11 +19,6 @@ from core.pagerank import rapport_pagerank
 from core.score_effect import calculer_facteurs_match
 from decision.ev import ev_posterior, kelly_prudent
 from decision.gate import evaluer_selection
-
-
-CHAMPS_HIST = ("date", "opponent", "corners_1h", "corners_2h",
-               "resultat_final", "resultat_mt", "cartons_rouges",
-               "xg_pour", "xg_contre", "xgot_pour", "xgot_contre")
 
 
 def parser_historique(texte, venue, equipe, lignes_attendues=15):
@@ -90,14 +88,14 @@ def analyser_match(data):
     hist_home = data["home_team_history"]
     hist_away = data["away_team_history"]
 
-    # ----- 0. Effet score : facteurs 2e MT -----
+    # ----- 0. Effet score -----
     score_info = calculer_facteurs_match(
         hist_home, hist_away, data["odds_1x2"]
     )
     f_home = score_info["facteur_home_2h"]
     f_away = score_info["facteur_away_2h"]
 
-    # ----- 1. Lois par equipe (avec effet score) -----
+    # ----- 1. Lois par equipe -----
     joint_home, cop_home, pmfs_home = _build_pmf_par_equipe(
         hist_home, facteur_2h=f_home
     )
@@ -107,8 +105,34 @@ def analyser_match(data):
 
     mc1_pmf = product_pmf(joint_home)
     mc2_pmf = product_pmf(joint_away)
-    global_pmf = convolve(mc1_pmf, mc2_pmf)
 
+    # ----- 2. Dependance inter-equipes pour GLOBAL -----
+    rho, n_rho, methode_rho = estimer_correlation_inter_equipes(
+        hist_home, hist_away
+    )
+
+    # Construire les vecteurs MC1, MC2 pour la copule
+    m1_vec = np.zeros(max(mc1_pmf.keys()) + 1)
+    m2_vec = np.zeros(max(mc2_pmf.keys()) + 1)
+    for k, v in mc1_pmf.items():
+        m1_vec[k] = v
+    for k, v in mc2_pmf.items():
+        m2_vec[k] = v
+
+    if abs(rho) >= 0.10:
+        joint_mc, info_mc = joint_mc_via_copule(m1_vec, m2_vec, rho)
+        global_pmf = global_depuis_joint_mc(joint_mc)
+    else:
+        global_pmf = convolve(mc1_pmf, mc2_pmf)
+        info_mc = {
+            "rho": rho, "tau": 0.0, "theta": 0.0,
+            "independance_ok": True, "methode": "independance",
+        }
+
+    info_mc["n"] = n_rho
+    info_mc["methode_estim"] = methode_rho
+
+    # ----- 3. Statistiques descriptives -----
     stats = {
         "MC1": moments(mc1_pmf),
         "MC2": moments(mc2_pmf),
@@ -118,10 +142,12 @@ def analyser_match(data):
         "p_zero_GLOBAL": p_zero(global_pmf),
     }
 
+    # ----- 4. PageRank -----
     pr = rapport_pagerank(hist_home, hist_away,
                           data["match"]["home_team"],
                           data["match"]["away_team"])
 
+    # ----- 5. Analyse des marches -----
     marches = {}
     lignes = data["market_lines"]
     pmfs_marche = {"MC1": mc1_pmf, "MC2": mc2_pmf, "GLOBAL": global_pmf}
@@ -237,6 +263,7 @@ def analyser_match(data):
         "copule_home": cop_home,
         "copule_away": cop_away,
         "score_effect": score_info,
+        "dependance_inter": info_mc,
         "selections_acceptees": selections_acceptees,
         "verdict": verdict,
-}
+    }
