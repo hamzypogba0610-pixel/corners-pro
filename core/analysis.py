@@ -20,20 +20,13 @@ from decision.ev import (
 from decision.gate import evaluer_selection, verdict_texte
 
 
-# ---------------------------------------------------------------------------
-# PARSING DES ZONES CSV
-# ---------------------------------------------------------------------------
-
 CHAMPS_HIST = ("date", "opponent", "corners_1h", "corners_2h",
                "resultat_final", "resultat_mt", "cartons_rouges",
                "xg_pour", "xg_contre", "xgot_pour", "xgot_contre")
 
 
 def parser_historique(texte, venue, equipe, lignes_attendues=15):
-    """
-    Convertit un bloc texte CSV en liste de dicts conforme au schema.
-    venue : 'H' ou 'A'
-    """
+    """Convertit un bloc texte CSV en liste de dicts conforme au schema."""
     erreurs = []
     matchs = []
     for i, ligne in enumerate(texte.strip().splitlines(), start=1):
@@ -77,15 +70,8 @@ def parser_historique(texte, venue, equipe, lignes_attendues=15):
     return matchs
 
 
-# ---------------------------------------------------------------------------
-# CONSTRUCTION DE L'ANALYSE PROBABILISTE
-# ---------------------------------------------------------------------------
-
 def _build_pmf_par_equipe(hist):
-    """
-    Construit la loi jointe A1 x A2 pour une equipe,
-    en utilisant la copule au lieu de l'independance.
-    """
+    """Construit la loi jointe A1 x A2 pour une equipe, avec copule."""
     pmfs = build_pmf_equipe(hist)
     a1 = pmfs["A1"]
     a2 = pmfs["A2"]
@@ -100,10 +86,7 @@ def _p_over_under(pmf, ligne):
 
 
 def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
-    """
-    Approximation a posteriori : beta centree sur p_centre avec un effectif
-    virtuel n_effectif. Utilise pour EV a posteriori.
-    """
+    """Approximation a posteriori : beta centree sur p_centre."""
     p_centre = max(1e-6, min(1 - 1e-6, p_centre))
     a = p_centre * n_effectif
     b = (1 - p_centre) * n_effectif
@@ -111,15 +94,8 @@ def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
     return rng.beta(a, b, n_samples)
 
 
-# ---------------------------------------------------------------------------
-# PIPELINE D'ANALYSE
-# ---------------------------------------------------------------------------
-
 def analyser_match(data):
-    """
-    Point d'entree. Prend un dict complet, retourne un rapport.
-    Leve ValidationError si les donnees sont invalides.
-    """
+    """Point d'entree. Prend un dict complet, retourne un rapport."""
     valider_match(data)
 
     hist_home = data["home_team_history"]
@@ -133,13 +109,14 @@ def analyser_match(data):
     mc2_pmf = product_pmf(joint_away)
     global_pmf = convolve(mc1_pmf, mc2_pmf)
 
-    # ----- 2. Statistiques descriptives -----
+    # ----- 2. Statistiques descriptives (toutes les cles necessaires) -----
     stats = {
         "MC1": moments(mc1_pmf),
         "MC2": moments(mc2_pmf),
         "GLOBAL": moments(global_pmf),
         "p_zero_MC1": p_zero(mc1_pmf),
         "p_zero_MC2": p_zero(mc2_pmf),
+        "p_zero_GLOBAL": p_zero(global_pmf),
     }
 
     # ----- 3. PageRank (contexte adversaires) -----
@@ -151,15 +128,19 @@ def analyser_match(data):
     marches = {}
     lignes = data["market_lines"]
     pmfs_marche = {"MC1": mc1_pmf, "MC2": mc2_pmf, "GLOBAL": global_pmf}
+    zeros_marche = {
+        "MC1": stats["p_zero_MC1"],
+        "MC2": stats["p_zero_MC2"],
+        "GLOBAL": stats["p_zero_GLOBAL"],
+    }
 
     for nom_marche, pmf in pmfs_marche.items():
         ligne = float(lignes[nom_marche]["line"])
         cote_over = float(lignes[nom_marche]["over"])
         cote_under = float(lignes[nom_marche]["under"])
 
-        p_over, p_under = _p_over_under(pmf, ligne)
+        p_over_val, p_under_val = _p_over_under(pmf, ligne)
 
-        # Retrait de marge (proportionnel + puissance)
         pi_over_prop, pi_under_prop, marge = margin_removal_proportional(
             cote_over, cote_under
         )
@@ -167,17 +148,15 @@ def analyser_match(data):
             cote_over, cote_under
         )
 
-        # EV a posteriori pour le cote Over
-        post_over = _distribution_posteriori(p_over)
+        post_over = _distribution_posteriori(p_over_val)
         ev_over_info = ev_posterior(post_over, cote_over)
-        post_under = _distribution_posteriori(p_under)
+        post_under = _distribution_posteriori(p_under_val)
         ev_under_info = ev_posterior(post_under, cote_under)
 
-        # Detecter faux signaux contextuels
         cartons_rouges_total = sum(
             m["cartons_rouges"] for m in hist_home + hist_away
         )
-        freq_zero = stats[f"p_zero_{nom_marche}"] if nom_marche in stats else 0.0
+        freq_zero = zeros_marche[nom_marche]
 
         ctx = {
             "cartons_rouges_recents": min(cartons_rouges_total, 5),
@@ -186,10 +165,9 @@ def analyser_match(data):
             "cote_min": min(cote_over, cote_under),
         }
 
-        # Evaluer Over
         analyse_over = {
             "n": 15,
-            "p_estime": p_over,
+            "p_estime": p_over_val,
             "p_implicite_sans_marge": pi_over_prop,
             "ev_p20": ev_over_info["ev_p20"],
             "spread_modeles": abs(pi_over_prop - pi_over_pow),
@@ -198,7 +176,7 @@ def analyser_match(data):
         }
         analyse_under = {
             "n": 15,
-            "p_estime": p_under,
+            "p_estime": p_under_val,
             "p_implicite_sans_marge": pi_under_prop,
             "ev_p20": ev_under_info["ev_p20"],
             "spread_modeles": abs(pi_under_prop - pi_under_pow),
@@ -208,10 +186,9 @@ def analyser_match(data):
         res_over = evaluer_selection(analyse_over)
         res_under = evaluer_selection(analyse_under)
 
-        # Choisir le cote avec l'EV le plus eleve S'IL est accepte
         cotes = {
             "over": {
-                "p": p_over,
+                "p": p_over_val,
                 "cote": cote_over,
                 "p_impl_prop": pi_over_prop,
                 "p_impl_pow": pi_over_pow,
@@ -222,7 +199,7 @@ def analyser_match(data):
                 ),
             },
             "under": {
-                "p": p_under,
+                "p": p_under_val,
                 "cote": cote_under,
                 "p_impl_prop": pi_under_prop,
                 "p_impl_pow": pi_under_pow,
@@ -241,7 +218,7 @@ def analyser_match(data):
             "ecart_methode_marge": abs(pi_over_prop - pi_over_pow),
         }
 
-    # ----- 5. Synthese de la decision -----
+    # ----- 5. Synthese -----
     selections_acceptees = []
     for nom_marche, info in marches.items():
         for cote in ("over", "under"):
