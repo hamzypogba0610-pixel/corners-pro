@@ -10,11 +10,8 @@ from decision.gate import evaluer_selection, detecter_faux_signaux, verdict_text
 
 def test_ev_over_simple():
     """EV = 0 quand p correspond exactement a la cote sans marge."""
-    # cote 2.0 -> sans marge p = 0.5. EV = 0.5*1 - 0.5*1 = 0
     assert abs(ev_over(0.5, 2.0)) < 1e-9
-    # p = 0.6 -> EV positif
     assert ev_over(0.6, 2.0) > 0
-    # p = 0.4 -> EV negatif
     assert ev_over(0.4, 2.0) < 0
     print("  OK : EV Over basique")
 
@@ -32,20 +29,19 @@ def test_kelly_zero_si_ev_negatif():
 def test_kelly_positif_si_edge():
     f = kelly_fraction(0.6, 2.0)
     assert 0 < f < 1
-    # f = (0.6*1 - 0.4)/1 = 0.2
     assert abs(f - 0.2) < 1e-9
     print(f"  OK : Kelly = {f:.3f}")
 
 
 def test_kelly_prudent_plafonne():
-    f = kelly_prudent(0.9, 5.0)  # Kelly theorique tres eleve
+    f = kelly_prudent(0.9, 5.0)
     assert f <= KELY_PLAFOND
     print(f"  OK : Kelly prudent plafonne a {f:.3f}")
 
 
 def test_ev_posterior_bornes():
     rng = np.random.default_rng(42)
-    p_samples = rng.beta(20, 10, 5000)  # moyenne ~0.667
+    p_samples = rng.beta(20, 10, 5000)
     r = ev_posterior(p_samples, cote=1.8)
     assert "ev_mediane" in r and "ev_p20" in r and "p_ev_positif" in r
     assert 0.0 <= r["p_ev_positif"] <= 1.0
@@ -79,11 +75,11 @@ def test_gate_refus_par_defaut():
 
 
 def test_gate_accepte_si_tout_bon():
-    """Un cas parfait doit passer... mais la penalite winner's curse rend ca dur."""
+    """Un cas parfait doit passer."""
     analyse = {
         "n": 20,
-        "p_estime": 0.60,                     # apres penalite -> 0.58
-        "p_implicite_sans_marge": 0.52,       # edge = 0.06
+        "p_estime": 0.60,
+        "p_implicite_sans_marge": 0.52,
         "ev_p20": 0.02,
         "spread_modeles": 0.03,
         "stable_sensibilite": True,
@@ -100,7 +96,7 @@ def test_gate_refuse_si_penalite_fait_passer_sous_seuil():
     analyse = {
         "n": 20,
         "p_estime": 0.565,
-        "p_implicite_sans_marge": 0.52,     # edge brut 4.5 pts
+        "p_implicite_sans_marge": 0.52,
         "ev_p20": 0.01,
         "contexte": {},
     }
@@ -110,17 +106,18 @@ def test_gate_refuse_si_penalite_fait_passer_sous_seuil():
 
 
 def test_faux_signaux_detectes():
+    """Tous les seuils doivent etre franchis pour declencher 7 alertes."""
     ctx = {
-        "cartons_rouges_recents": 2,
-        "cv_mc": 2.0,
-        "freq_zero_mc": 0.5,
-        "cote_min": 1.20,
-        "pagerank_homogene": False,
-        "changement_entraineur": True,
-        "rotation_probable": True,
+        "cartons_rouges_recents": 2,      # seuil >= 2
+        "cv_mc": 2.5,                     # seuil > 2.0
+        "freq_zero_mc": 0.6,              # seuil > 0.5
+        "cote_min": 1.20,                 # seuil < 1.30
+        "pagerank_homogene": False,       # doit etre False
+        "changement_entraineur": True,    # doit etre True
+        "rotation_probable": True,        # doit etre True
     }
     alertes = detecter_faux_signaux(ctx)
-    assert len(alertes) == 7
+    assert len(alertes) == 7, f"attendu 7, obtenu {len(alertes)} : {alertes}"
     print(f"  OK : 7 faux signaux detectes")
 
 
