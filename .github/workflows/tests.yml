@@ -36,3 +36,4 @@ jobs:
           python test_zero_inflation.py
           python test_sensitivity.py
           python test_backtest.py
+          python test_league_factor.py
