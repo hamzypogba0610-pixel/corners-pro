@@ -37,3 +37,5 @@ jobs:
           python test_sensitivity.py
           python test_backtest.py
           python test_league_factor.py
+          python test_integrity.py
+          python test_calibration.py
