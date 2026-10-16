@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 11.0 : facteur de ligue + style d'equipe.
+Version 12.0 : integrite + calibration.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,7 @@ from validation.backtest import (
 )
 
 
-app = FastAPI(title="corners-pro", version="1.1.0")
+app = FastAPI(title="corners-pro", version="1.2.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -94,7 +94,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 1.1.0 — facteur de ligue + style d'équipe</div>
+        <div class="info">Version 1.2.0 — intégrité + calibration</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -451,8 +451,7 @@ def _badge_style(label):
     return '<span class="badge badge-eq">? inconnu</span>'
 
 
-def _rendre_ligue_style(ligue, style_home, style_away,
-                        nom_home, nom_away):
+def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
     if not ligue:
         return ""
 
@@ -514,6 +513,52 @@ def _rendre_ligue_style(ligue, style_home, style_away,
     """
 
 
+def _rendre_integrite_calibration(integrite, cal_active, nb_marches):
+    if not integrite:
+        return ""
+    if integrite.get("ok"):
+        statut_int = '<span class="ok">✓ Intégrité validée</span>'
+    else:
+        statut_int = '<span class="err">✗ Intégrité compromise</span>'
+
+    bloquants = integrite.get("problemes_bloquants", [])
+    avertissements = integrite.get("avertissements", [])
+
+    bloc_bloq = ""
+    if bloquants:
+        items = "".join(
+            f"<li>{html_mod.escape(str(x))}</li>" for x in bloquants[:10]
+        )
+        bloc_bloq = f'<div class="raisons">Bloquants<ul>{items}</ul></div>'
+
+    bloc_av = ""
+    if avertissements:
+        items = "".join(
+            f"<li>{html_mod.escape(str(x))}</li>" for x in avertissements[:10]
+        )
+        bloc_av = f'<div class="raisons">Avertissements<ul>{items}</ul></div>'
+
+    if cal_active:
+        statut_cal = (
+            '<span class="ok">✓ Calibration active</span>'
+        )
+    else:
+        statut_cal = (
+            '<span class="info">Calibration inactive — '
+            'nécessite des données réelles (50+ prédictions terminées)</span>'
+        )
+
+    return f"""
+      <h2>Couche d'intégrité et calibration</h2>
+      <p class="info">
+        <b>Intégrité</b> : {statut_int} — {nb_marches} marchés vérifiés<br>
+        <b>Calibration</b> : {statut_cal}
+      </p>
+      {bloc_bloq}
+      {bloc_av}
+    """
+
+
 def _rendre_ligne_pari(nom, cote_nom, c, match_label):
     label = cote_nom.upper()
     gate = c["gate"]
@@ -547,10 +592,19 @@ def _rendre_ligne_pari(nom, cote_nom, c, match_label):
             f'📌 Enregistrer cette prédiction</button>'
         )
 
+    # Affichage p brut vs p calibree si different
+    p_brut = c.get("p_brut", c["p"])
+    calibree = c.get("calibree", False)
+    ligne_p = f"{_fmt_pct(c['p'])}"
+    if calibree and abs(p_brut - c["p"]) > 1e-6:
+        ligne_p += (
+            f'<br><span class="ic80">brut {p_brut*100:.2f}%</span>'
+        )
+
     return f"""
       <tr>
         <td><b>{label}</b></td>
-        <td>{_fmt_pct(c['p'])}<br>
+        <td>{ligne_p}<br>
             <span class="ic80">[{ic_bas*100:.1f} – {ic_haut*100:.1f}]</span>
         </td>
         <td>{_fmt_pct(c['p_impl_prop'])}</td>
@@ -790,6 +844,11 @@ async def analyser(request: Request):
         rapport["match"]["home_team"],
         rapport["match"]["away_team"],
     )
+    integrite_html = _rendre_integrite_calibration(
+        rapport.get("integrite"),
+        rapport.get("calibration_active", False),
+        len(rapport.get("marches", {})),
+    )
 
     return _page("Rapport", f"""
       <h1>Rapport</h1>
@@ -824,6 +883,8 @@ async def analyser(request: Request):
 
       {tornade_html}
 
+      {integrite_html}
+
       <h2>Détail par marché</h2>
       {bloc_marches}
 
@@ -844,4 +905,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "1.1.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "1.2.0"}
