@@ -1,6 +1,7 @@
 """
 Modele hierarchique gamma-Poisson avec ponderation temporelle,
-effet score 2e MT, et inflation de zeros.
+effet score 2e MT, inflation de zeros, et poids reduit pour
+les matchs globaux ('N').
 Reference : MULTICORNER 360 v2, section 4.
 """
 import numpy as np
@@ -12,9 +13,14 @@ from core.zero_inflation import tester_inflation, pmf_zinb
 KMAX_MIN = 20
 KMAX_MARGE = 5
 DEMI_VIE_DEFAUT = 8
+FACTEUR_LIEU_GLOBAL = 0.6  # match global ('N') : poids reduit
 
 
 def poids_temporels(hist, demi_vie=DEMI_VIE_DEFAUT):
+    """
+    Poids exponentiels par age + facteur de lieu.
+    Les matchs 'N' (globaux) pesent 0.6x moins que les matchs au lieu exact.
+    """
     n = len(hist)
     if n == 0:
         return np.array([])
@@ -24,11 +30,15 @@ def poids_temporels(hist, demi_vie=DEMI_VIE_DEFAUT):
     age_par_idx = {}
     for pos, idx in enumerate(indices):
         age_par_idx[idx] = (n - 1) - pos
-    poids = np.array([
+    poids_temps = np.array([
         2.0 ** (-age_par_idx[i] / float(demi_vie))
         for i in range(n)
     ])
-    return poids
+    facteur_lieu = np.array([
+        FACTEUR_LIEU_GLOBAL if hist[i].get("venue") == "N" else 1.0
+        for i in range(n)
+    ])
+    return poids_temps * facteur_lieu
 
 
 def estimate_alpha_beta(valeurs, poids=None):
@@ -84,8 +94,8 @@ def _km(hist, cle):
 def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0,
                      utiliser_zinb=True):
     """
-    PMF de A1 et A2 avec shrinkage, ponderation temporelle, effet score,
-    et inflation de zeros optionnelle.
+    PMF de A1 et A2 avec shrinkage, ponderation temporelle (age + lieu),
+    effet score, et inflation de zeros optionnelle.
     """
     a1 = [m["corners_1h"] for m in hist]
     a2 = [m["corners_2h"] for m in hist]
@@ -103,7 +113,6 @@ def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0,
     km1 = _km(hist, "corners_1h")
     km2 = _km(hist, "corners_2h")
 
-    # --- Inflation de zeros ---
     info_z1 = {"inflation": False, "pi": 0.0, "raison": "desactive"}
     info_z2 = {"inflation": False, "pi": 0.0, "raison": "desactive"}
     if utiliser_zinb:
