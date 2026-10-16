@@ -1,8 +1,10 @@
 """
 Orchestrateur : de la saisie au verdict.
-Integre : ponderation temporelle (age + lieu), IC80, effet score,
-dependance inter-equipes, inflation de zeros, tornade, et facteur de ligue.
+Integre : ponderation temporelle, IC80, effet score, dependance inter-equipes,
+inflation de zeros, tornade, facteur de ligue, integrite et calibration.
 """
+import os
+import json
 import numpy as np
 from data.schema import valider_match, ValidationError
 from core.hierarchical import build_pmf_equipe
@@ -19,6 +21,8 @@ from core.pagerank import rapport_pagerank
 from core.score_effect import calculer_facteurs_match
 from core.sensitivity import SCENARIOS, perturber_hist
 from core.league_factor import facteur_ligue, style_equipe
+from core.integrity import verifier_rapport_complet
+from core.calibration import appliquer as appliquer_calibration
 from decision.ev import ev_posterior, kelly_prudent
 from decision.gate import evaluer_selection
 
@@ -27,6 +31,18 @@ MARCHES = ("MC1", "MC2", "GLOBAL")
 COTES = ("over", "under")
 N_MATCHS_LIEU = 10
 N_MATCHS_GLOBAUX = 5
+FICHIER_CALIBRATION = "data/calibration_params.json"
+
+
+def _charger_params_calibration():
+    """Charge les parametres de calibration si le fichier existe."""
+    try:
+        if not os.path.isfile(FICHIER_CALIBRATION):
+            return None
+        with open(FICHIER_CALIBRATION, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def parser_historique(texte, venue_attendu, equipe, lignes_attendues=15):
@@ -93,7 +109,7 @@ def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
     return rng.beta(a, b, n_samples)
 
 
-def _pipeline(data, params=None):
+def _pipeline(data, params=None, params_cal=None):
     params = params or {}
     demi_vie = params.get("demi_vie", 8)
     facteur_moyenne = params.get("facteur_moyenne", 1.0)
@@ -111,7 +127,6 @@ def _pipeline(data, params=None):
         hist_home = hist_home_0
         hist_away = hist_away_0
 
-    # Facteur de ligue
     if f_ligue_override is not None:
         f_ligue = float(f_ligue_override)
         ligue_info = {
@@ -124,7 +139,6 @@ def _pipeline(data, params=None):
         ligue_info = facteur_ligue(data["match"]["competition"])
         f_ligue = ligue_info["facteur"]
 
-    # Styles d'equipe (visible dans le rapport)
     style_home = style_equipe(hist_home_0, data["match"]["competition"])
     style_away = style_equipe(hist_away_0, data["match"]["competition"])
 
@@ -199,6 +213,10 @@ def _pipeline(data, params=None):
 
         p_over_val, p_under_val = p_over(pmf, ligne), p_under(pmf, ligne)
 
+        # --- Calibration ---
+        p_over_cal, info_cal_over = appliquer_calibration(p_over_val, params_cal)
+        p_under_cal, info_cal_under = appliquer_calibration(p_under_val, params_cal)
+
         pi_over_prop, pi_under_prop, marge = margin_removal_proportional(
             cote_over, cote_under
         )
@@ -206,9 +224,9 @@ def _pipeline(data, params=None):
             cote_over, cote_under
         )
 
-        post_over = _distribution_posteriori(p_over_val)
+        post_over = _distribution_posteriori(p_over_cal)
         ev_over_info = ev_posterior(post_over, cote_over)
-        post_under = _distribution_posteriori(p_under_val)
+        post_under = _distribution_posteriori(p_under_cal)
         ev_under_info = ev_posterior(post_under, cote_under)
 
         rouges_home_5 = sum(m["cartons_rouges"] for m in hist_home_0[:5])
@@ -225,7 +243,7 @@ def _pipeline(data, params=None):
 
         analyse_over = {
             "n": 15,
-            "p_estime": p_over_val,
+            "p_estime": p_over_cal,
             "p_implicite_sans_marge": pi_over_prop,
             "ev_p20": ev_over_info["ev_p20"],
             "spread_modeles": abs(pi_over_prop - pi_over_pow),
@@ -235,7 +253,7 @@ def _pipeline(data, params=None):
         }
         analyse_under = {
             "n": 15,
-            "p_estime": p_under_val,
+            "p_estime": p_under_cal,
             "p_implicite_sans_marge": pi_under_prop,
             "ev_p20": ev_under_info["ev_p20"],
             "spread_modeles": abs(pi_under_prop - pi_under_pow),
@@ -250,7 +268,9 @@ def _pipeline(data, params=None):
             "ligne": ligne,
             "cotes": {
                 "over": {
-                    "p": p_over_val,
+                    "p": p_over_cal,
+                    "p_brut": p_over_val,
+                    "calibree": info_cal_over["calibree"],
                     "cote": cote_over,
                     "p_impl_prop": pi_over_prop,
                     "p_impl_pow": pi_over_pow,
@@ -261,7 +281,9 @@ def _pipeline(data, params=None):
                     ),
                 },
                 "under": {
-                    "p": p_under_val,
+                    "p": p_under_cal,
+                    "p_brut": p_under_val,
+                    "calibree": info_cal_under["calibree"],
                     "cote": cote_under,
                     "p_impl_prop": pi_under_prop,
                     "p_impl_pow": pi_under_pow,
@@ -323,12 +345,30 @@ def _recompute_verdict(rapport):
 def analyser_match(data):
     valider_match(data)
 
-    base = _pipeline(data, {})
+    params_cal = _charger_params_calibration()
+    base = _pipeline(data, {}, params_cal=params_cal)
 
+    # --- Verifications d'integrite ---
+    integrite = verifier_rapport_complet(base)
+    base["integrite"] = integrite
+
+    # Si des problemes bloquants, on rejette toutes les selections
+    if not integrite["ok"]:
+        for m in MARCHES:
+            for c in COTES:
+                gate = base["marches"][m]["cotes"][c]["gate"]
+                if gate["accepte"]:
+                    gate["accepte"] = False
+                    gate["raisons_refus"].append(
+                        "Intégrité : " + " | ".join(
+                            integrite["problemes_bloquants"][:3]
+                        )
+                    )
+
+    # --- Tornade ---
     base_decisions = {
         (m, c): _decision(base, m, c) for m in MARCHES for c in COTES
     }
-
     stabilite = {
         (m, c): {"stable": True, "flips": [], "scenarios": []}
         for m in MARCHES for c in COTES
@@ -336,7 +376,7 @@ def analyser_match(data):
 
     for sc_nom, sc_params in SCENARIOS:
         try:
-            r = _pipeline(data, sc_params)
+            r = _pipeline(data, sc_params, params_cal=params_cal)
         except Exception:
             continue
         for m in MARCHES:
@@ -365,4 +405,5 @@ def analyser_match(data):
 
     _recompute_verdict(base)
     base["stabilite"] = stabilite
+    base["calibration_active"] = params_cal is not None
     return base
