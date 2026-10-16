@@ -16,13 +16,10 @@ def hist_bidon():
 
 def test_scenarios_definis():
     noms = [s[0] for s in SCENARIOS]
-    for attendu in ("moyenne_basse", "moyenne_haute",
-                    "demi_vie_courte", "demi_vie_longue",
-                    "independance_MC", "dependance_forte",
-                    "sans_extremes"):
+    for attendu in ("moyenne_basse", "moyenne_haute", "sans_extremes"):
         assert attendu in noms, f"scenario manquant : {attendu}"
-    assert len(SCENARIOS) == 7
-    print(f"  OK : 7 scenarios definis")
+    assert len(SCENARIOS) == 3, f"attendu 3 scenarios, obtenu {len(SCENARIOS)}"
+    print(f"  OK : 3 scenarios definis (tornade reduite)")
 
 
 def test_perturber_ne_modifie_pas_original():
@@ -52,7 +49,6 @@ def test_facteur_moyenne_augmente():
 
 def test_retirer_extremes_garde_n():
     h = hist_bidon()
-    # Injecter 2 extremes
     h[0]["corners_1h"] = 0
     h[0]["corners_2h"] = 0
     h[1]["corners_1h"] = 15
@@ -62,7 +58,7 @@ def test_retirer_extremes_garde_n():
     print(f"  OK : n=15 apres retrait extremes")
 
 
-def test_extremes_sont_moderés():
+def test_extremes_sont_moderes():
     """Les extremes doivent etre remplaces par la mediane."""
     h = hist_bidon()
     h[0]["corners_1h"] = 0
@@ -70,7 +66,6 @@ def test_extremes_sont_moderés():
     h[1]["corners_1h"] = 15
     h[1]["corners_2h"] = 15
     h_p = perturber_hist(h, retirer_extremes=2)
-    # Les extremes ne doivent plus etre 0 ni 15
     vals_1h = sorted(m["corners_1h"] for m in h_p)
     assert vals_1h[0] > 0, "0 devrait avoir disparu"
     assert vals_1h[-1] < 15, "15 devrait avoir disparu"
@@ -92,7 +87,7 @@ if __name__ == "__main__":
         test_facteur_moyenne_reduit,
         test_facteur_moyenne_augmente,
         test_retirer_extremes_garde_n,
-        test_extremes_sont_moderés,
+        test_extremes_sont_moderes,
         test_perturbation_neutre,
     ]
     print("=== Tests sensibilite ===\n")
