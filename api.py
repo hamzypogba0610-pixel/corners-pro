@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 9.0 : suivi de performance des predictions.
+Version 10.0 : repartition 10 matchs au lieu + 5 globaux.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,7 @@ from validation.backtest import (
 )
 
 
-app = FastAPI(title="corners-pro", version="0.9.0")
+app = FastAPI(title="corners-pro", version="1.0.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -72,6 +72,8 @@ def _page(titre, corps, scripts=""):
     .barre-equipe {{ margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }}
     .barre-equipe select {{ flex:1; min-width:150px; font-size:13px; padding:8px; }}
     .ic80 {{ font-size:11px; color:#8b949e; }}
+    .encadre {{ background:#1f2937; border-left:3px solid #58a6ff;
+                padding:8px 12px; margin:8px 0; font-size:12px; color:#c9d1d9; }}
   </style>
 </head>
 <body>
@@ -87,7 +89,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.9.0 — suivi de performance</div>
+        <div class="info">Version 1.0.0 — répartition 10 + 5</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -126,7 +128,12 @@ def nouveau():
         <label>Cote Extérieur</label>
         <input name="odd_away" type="number" step="0.01" min="1.01" required placeholder="3.20">
 
-        <h2>3. Historique équipe domicile (15 matchs à domicile)</h2>
+        <h2>3. Historique équipe domicile</h2>
+        <div class="encadre">
+          <b>📋 Règle de saisie :</b><br>
+          • <b>10 premiers matchs</b> = matchs joués <b>à domicile</b><br>
+          • <b>5 derniers matchs</b> = matchs <b>globaux</b> (domicile, extérieur ou neutre)
+        </div>
         <div class="info">
           <code>date,adversaire,c1h,c2h,rf,rmt,rouge,xg,xga,xgot,xgota</code>
         </div>
@@ -146,7 +153,12 @@ def nouveau():
         <textarea name="home_history" id="home_history" required
                   placeholder="2026-01-15,Marseille,3,4,V,N,0,1.5,0.9,1.2,0.7"></textarea>
 
-        <h2>4. Historique équipe extérieur (15 matchs à l'extérieur)</h2>
+        <h2>4. Historique équipe extérieur</h2>
+        <div class="encadre">
+          <b>📋 Règle de saisie :</b><br>
+          • <b>10 premiers matchs</b> = matchs joués <b>à l'extérieur</b><br>
+          • <b>5 derniers matchs</b> = matchs <b>globaux</b> (domicile, extérieur ou neutre)
+        </div>
         <div class="barre-equipe">
           <select id="select_away">
             <option value="">— Choisir une équipe —</option>
@@ -745,4 +757,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.9.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "1.0.0"}
