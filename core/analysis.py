@@ -1,7 +1,6 @@
 """
 Orchestrateur : de la saisie au verdict.
-Integre : ponderation temporelle, IC80, effet score, dependance inter-equipes,
-inflation de zeros, tornade, facteur de ligue, integrite et calibration.
+Le mode RAPIDE saute la tornade. Le mode COMPLET la lance.
 """
 import os
 import json
@@ -35,7 +34,6 @@ FICHIER_CALIBRATION = "data/calibration_params.json"
 
 
 def _charger_params_calibration():
-    """Charge les parametres de calibration si le fichier existe."""
     try:
         if not os.path.isfile(FICHIER_CALIBRATION):
             return None
@@ -109,7 +107,11 @@ def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
     return rng.beta(a, b, n_samples)
 
 
-def _pipeline(data, params=None, params_cal=None):
+def _pipeline(data, params=None, params_cal=None, faire_copule_inter=True):
+    """
+    faire_copule_inter : False -> saute la copule 2D inter-equipes
+    (utilise la convolution simple). Gain de temps significatif.
+    """
     params = params or {}
     demi_vie = params.get("demi_vie", 8)
     facteur_moyenne = params.get("facteur_moyenne", 1.0)
@@ -156,7 +158,12 @@ def _pipeline(data, params=None, params_cal=None):
     mc1_pmf = product_pmf(joint_home)
     mc2_pmf = product_pmf(joint_away)
 
-    if rho_force is not None:
+    # --- Dependance inter-equipes (sautable) ---
+    if not faire_copule_inter:
+        rho = 0.0
+        n_rho = 0
+        methode_rho = "sautee (mode rapide)"
+    elif rho_force is not None:
         rho = float(rho_force)
         methode_rho = "force"
         n_rho = 0
@@ -165,21 +172,21 @@ def _pipeline(data, params=None, params_cal=None):
             hist_home, hist_away
         )
 
-    m1_vec = np.zeros(max(mc1_pmf.keys()) + 1)
-    m2_vec = np.zeros(max(mc2_pmf.keys()) + 1)
-    for k, v in mc1_pmf.items():
-        m1_vec[k] = v
-    for k, v in mc2_pmf.items():
-        m2_vec[k] = v
-
-    if abs(rho) >= 0.10:
+    if faire_copule_inter and abs(rho) >= 0.10:
+        m1_vec = np.zeros(max(mc1_pmf.keys()) + 1)
+        m2_vec = np.zeros(max(mc2_pmf.keys()) + 1)
+        for k, v in mc1_pmf.items():
+            m1_vec[k] = v
+        for k, v in mc2_pmf.items():
+            m2_vec[k] = v
         joint_mc, info_mc = joint_mc_via_copule(m1_vec, m2_vec, rho)
         global_pmf = global_depuis_joint_mc(joint_mc)
     else:
         global_pmf = convolve(mc1_pmf, mc2_pmf)
         info_mc = {
             "rho": rho, "tau": 0.0, "theta": 0.0,
-            "independance_ok": True, "methode": "independance",
+            "independance_ok": True,
+            "methode": "independance" if faire_copule_inter else "rapide",
         }
     info_mc["n"] = n_rho
     info_mc["methode_estim"] = methode_rho
@@ -212,8 +219,6 @@ def _pipeline(data, params=None, params_cal=None):
         cote_under = float(lignes[nom_marche]["under"])
 
         p_over_val, p_under_val = p_over(pmf, ligne), p_under(pmf, ligne)
-
-        # --- Calibration ---
         p_over_cal, info_cal_over = appliquer_calibration(p_over_val, params_cal)
         p_under_cal, info_cal_under = appliquer_calibration(p_under_val, params_cal)
 
@@ -342,17 +347,48 @@ def _recompute_verdict(rapport):
     )
 
 
+def _tornade_vide():
+    """Retourne un dict stabilite vide (tout marque stable)."""
+    return {
+        (m, c): {"stable": True, "flips": [], "scenarios": []}
+        for m in MARCHES for c in COTES
+    }
+
+
 def analyser_match(data):
     valider_match(data)
 
+    mode = data["match"].get("mode", "RAPIDE")
     params_cal = _charger_params_calibration()
-    base = _pipeline(data, {}, params_cal=params_cal)
 
-    # --- Verifications d'integrite ---
+    # --- Mode RAPIDE : pas de copule inter, pas de tornade ---
+    if mode == "RAPIDE":
+        base = _pipeline(data, {}, params_cal=params_cal,
+                         faire_copule_inter=False)
+        integrite = verifier_rapport_complet(base)
+        base["integrite"] = integrite
+        if not integrite["ok"]:
+            for m in MARCHES:
+                for c in COTES:
+                    gate = base["marches"][m]["cotes"][c]["gate"]
+                    if gate["accepte"]:
+                        gate["accepte"] = False
+                        gate["raisons_refus"].append(
+                            "Intégrité : " + " | ".join(
+                                integrite["problemes_bloquants"][:3]
+                            )
+                        )
+        base["stabilite"] = _tornade_vide()
+        base["calibration_active"] = params_cal is not None
+        base["mode_utilise"] = "RAPIDE"
+        _recompute_verdict(base)
+        return base
+
+    # --- Mode COMPLET : copule inter + tornade 3 scenarios ---
+    base = _pipeline(data, {}, params_cal=params_cal,
+                     faire_copule_inter=True)
     integrite = verifier_rapport_complet(base)
     base["integrite"] = integrite
-
-    # Si des problemes bloquants, on rejette toutes les selections
     if not integrite["ok"]:
         for m in MARCHES:
             for c in COTES:
@@ -365,7 +401,6 @@ def analyser_match(data):
                         )
                     )
 
-    # --- Tornade ---
     base_decisions = {
         (m, c): _decision(base, m, c) for m in MARCHES for c in COTES
     }
@@ -376,7 +411,8 @@ def analyser_match(data):
 
     for sc_nom, sc_params in SCENARIOS:
         try:
-            r = _pipeline(data, sc_params, params_cal=params_cal)
+            r = _pipeline(data, sc_params, params_cal=params_cal,
+                          faire_copule_inter=False)
         except Exception:
             continue
         for m in MARCHES:
@@ -406,4 +442,5 @@ def analyser_match(data):
     _recompute_verdict(base)
     base["stabilite"] = stabilite
     base["calibration_active"] = params_cal is not None
+    base["mode_utilise"] = "COMPLET"
     return base
