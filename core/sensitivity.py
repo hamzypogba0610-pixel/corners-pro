@@ -3,17 +3,21 @@ Test de sensibilite (tableau tornade).
 Fait varier les parametres du modele pour verifier la robustesse
 de la decision.
 Reference : MULTICORNER 360 v2, section 7.
+
+Note performance : la tornade relance le pipeline complet pour chaque
+scenario. Sur Render free (0.1 CPU), 7 scenarios depassent le timeout
+de 100 secondes. On en garde 3 (les plus utiles) pour rester dans les
+limites. A re-activer si on migre sur un serveur plus rapide.
 """
 import numpy as np
 
 
+# Tornade reduite a 3 scenarios.
+# Retires : demi_vie_courte, demi_vie_longue (peu discriminants),
+# independance_MC, dependance_forte (relancent la copule 2D, tres lourds).
 SCENARIOS = [
     ("moyenne_basse",   {"facteur_moyenne": 0.85}),
     ("moyenne_haute",   {"facteur_moyenne": 1.15}),
-    ("demi_vie_courte", {"demi_vie": 6}),
-    ("demi_vie_longue", {"demi_vie": 10}),
-    ("independance_MC", {"rho_force": 0.0}),
-    ("dependance_forte", {"rho_force": 0.30}),
     ("sans_extremes",   {"retirer_extremes": 2}),
 ]
 
