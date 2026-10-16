@@ -1,7 +1,6 @@
 """
 Schema de validation des donnees saisies par l'utilisateur.
-Version 3 : ajoute xg_pour, xg_contre, xgot_pour, xgot_contre.
-Reference : MULTICORNER 360 v2, sections 2 et 4.
+Version 4 : repartition 10 matchs au lieu specifie + 5 globaux.
 """
 import re
 from datetime import datetime
@@ -10,11 +9,13 @@ from datetime import datetime
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MARKETS_OK = ("MC1", "MC2", "GLOBAL")
 N_MATCHS_REQUIS = 15
+N_MATCHS_LIEU = 10        # les 10 premiers doivent etre au lieu specifie
+N_MATCHS_GLOBAUX = 5      # les 5 suivants sont globaux ('N')
 RESULTATS_OK = ("V", "N", "D")
+VENUES_VALIDES = ("H", "A", "N")
 
 
 class ValidationError(Exception):
-    """Levee quand une donnee est invalide."""
     pass
 
 
@@ -60,27 +61,43 @@ def _check_history(hist, champ, venue_attendu, n=N_MATCHS_REQUIS):
         raise ValidationError(f"{champ} : doit etre une liste")
     if len(hist) != n:
         raise ValidationError(f"{champ} : {len(hist)} matchs au lieu de {n}")
+
+    n_lieu = 0
     for i, m in enumerate(hist):
         prefix = f"{champ}[{i}]"
         if not isinstance(m, dict):
             raise ValidationError(f"{prefix} : doit etre un objet")
         _check_date(m.get("date"), f"{prefix}.date")
         _check_non_vide(m.get("opponent"), f"{prefix}.opponent")
-        if m.get("venue") != venue_attendu:
+
+        venue = m.get("venue")
+        if venue not in VENUES_VALIDES:
             raise ValidationError(
-                f"{prefix}.venue doit valoir '{venue_attendu}', "
-                f"recu {m.get('venue')!r}"
+                f"{prefix}.venue doit etre 'H', 'A' ou 'N', recu {venue!r}"
             )
+        if venue == venue_attendu:
+            n_lieu += 1
+        elif venue != "N":
+            raise ValidationError(
+                f"{prefix}.venue doit valoir '{venue_attendu}' ou 'N', "
+                f"recu {venue!r}"
+            )
+
         _check_entier_positif(m.get("corners_1h"), f"{prefix}.corners_1h")
         _check_entier_positif(m.get("corners_2h"), f"{prefix}.corners_2h")
         _check_resultat(m.get("resultat_final"), f"{prefix}.resultat_final")
         _check_resultat(m.get("resultat_mt"), f"{prefix}.resultat_mt")
         _check_entier_positif(m.get("cartons_rouges"), f"{prefix}.cartons_rouges")
-        # xG / xGoT : nombres decimaux positifs
         _check_float_positif(m.get("xg_pour"), f"{prefix}.xg_pour")
         _check_float_positif(m.get("xg_contre"), f"{prefix}.xg_contre")
         _check_float_positif(m.get("xgot_pour"), f"{prefix}.xgot_pour")
         _check_float_positif(m.get("xgot_contre"), f"{prefix}.xgot_contre")
+
+    if n_lieu < N_MATCHS_LIEU:
+        raise ValidationError(
+            f"{champ} : au moins {N_MATCHS_LIEU} matchs doivent etre au lieu "
+            f"'{venue_attendu}', trouve {n_lieu}"
+        )
 
 
 def _check_lines(lines, champ):
@@ -122,7 +139,6 @@ def _check_odds_1x2(odds, champ):
 
 
 def valider_match(data):
-    """Valide un dict complet de match. Leve ValidationError si invalide."""
     if not isinstance(data, dict):
         raise ValidationError("Les donnees doivent etre un objet JSON")
     if "match" not in data:
