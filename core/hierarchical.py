@@ -1,8 +1,7 @@
 """
 Modele hierarchique gamma-Poisson avec ponderation temporelle,
-effet score 2e MT, inflation de zeros, et poids reduit pour
-les matchs globaux ('N').
-Reference : MULTICORNER 360 v2, section 4.
+effet score 2e MT, inflation de zeros, poids reduit pour les matchs
+globaux ('N'), et facteur de ligue.
 """
 import numpy as np
 from scipy.stats import nbinom
@@ -13,14 +12,10 @@ from core.zero_inflation import tester_inflation, pmf_zinb
 KMAX_MIN = 20
 KMAX_MARGE = 5
 DEMI_VIE_DEFAUT = 8
-FACTEUR_LIEU_GLOBAL = 0.6  # match global ('N') : poids reduit
+FACTEUR_LIEU_GLOBAL = 0.6
 
 
 def poids_temporels(hist, demi_vie=DEMI_VIE_DEFAUT):
-    """
-    Poids exponentiels par age + facteur de lieu.
-    Les matchs 'N' (globaux) pesent 0.6x moins que les matchs au lieu exact.
-    """
     n = len(hist)
     if n == 0:
         return np.array([])
@@ -92,10 +87,10 @@ def _km(hist, cle):
 
 
 def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0,
-                     utiliser_zinb=True):
+                     facteur_ligue=1.0, utiliser_zinb=True):
     """
-    PMF de A1 et A2 avec shrinkage, ponderation temporelle (age + lieu),
-    effet score, et inflation de zeros optionnelle.
+    PMF de A1 et A2 avec shrinkage, ponderation temporelle,
+    effet score, facteur de ligue, et inflation de zeros.
     """
     a1 = [m["corners_1h"] for m in hist]
     a2 = [m["corners_2h"] for m in hist]
@@ -108,7 +103,11 @@ def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0,
 
     aa1, bb1 = posterior_alpha_beta(a1, alpha0, beta0, poids=w)
     aa2, bb2 = posterior_alpha_beta(a2, alpha0, beta0, poids=w)
-    aa2_ajuste = aa2 * float(facteur_2h)
+    # Facteur de ligue s'applique aux DEUX mi-temps.
+    # Facteur effet score 2e MT s'applique a la 2e MT uniquement.
+    f_ligue = float(facteur_ligue)
+    aa1_ajuste = aa1 * f_ligue
+    aa2_ajuste = aa2 * float(facteur_2h) * f_ligue
 
     km1 = _km(hist, "corners_1h")
     km2 = _km(hist, "corners_2h")
@@ -116,18 +115,18 @@ def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0,
     info_z1 = {"inflation": False, "pi": 0.0, "raison": "desactive"}
     info_z2 = {"inflation": False, "pi": 0.0, "raison": "desactive"}
     if utiliser_zinb:
-        info_z1 = tester_inflation(a1, aa1, bb1)
+        info_z1 = tester_inflation(a1, aa1_ajuste, bb1)
         info_z2 = tester_inflation(a2, aa2_ajuste, bb2)
         if info_z1["inflation"]:
-            pmf_a1 = pmf_zinb(km1, aa1, bb1, info_z1["pi"])
+            pmf_a1 = pmf_zinb(km1, aa1_ajuste, bb1, info_z1["pi"])
         else:
-            pmf_a1 = nb_pmf(km1, aa1, bb1)
+            pmf_a1 = nb_pmf(km1, aa1_ajuste, bb1)
         if info_z2["inflation"]:
             pmf_a2 = pmf_zinb(km2, aa2_ajuste, bb2, info_z2["pi"])
         else:
             pmf_a2 = nb_pmf(km2, aa2_ajuste, bb2)
     else:
-        pmf_a1 = nb_pmf(km1, aa1, bb1)
+        pmf_a1 = nb_pmf(km1, aa1_ajuste, bb1)
         pmf_a2 = nb_pmf(km2, aa2_ajuste, bb2)
 
     return {
@@ -136,11 +135,13 @@ def build_pmf_equipe(hist, demi_vie=DEMI_VIE_DEFAUT, facteur_2h=1.0,
         "poids": w,
         "demi_vie": demi_vie,
         "facteur_2h": float(facteur_2h),
+        "facteur_ligue": f_ligue,
         "zero_inflation": {"A1": info_z1, "A2": info_z2},
         "alpha_beta": {
             "prior": (alpha0, beta0),
             "posterior_A1": (aa1, bb1),
             "posterior_A2": (aa2, bb2),
+            "posterior_A1_ajuste": (aa1_ajuste, bb1),
             "posterior_A2_ajuste": (aa2_ajuste, bb2),
         },
     }
@@ -153,13 +154,15 @@ def build_joint(pmf_a1, pmf_a2):
 
 def build_mc_global(hist_home, hist_away, demi_vie=DEMI_VIE_DEFAUT,
                     facteur_home_2h=1.0, facteur_away_2h=1.0,
-                    utiliser_zinb=True):
+                    facteur_ligue=1.0, utiliser_zinb=True):
     from core.product_law import convolve
     home = build_pmf_equipe(hist_home, demi_vie=demi_vie,
                             facteur_2h=facteur_home_2h,
+                            facteur_ligue=facteur_ligue,
                             utiliser_zinb=utiliser_zinb)
     away = build_pmf_equipe(hist_away, demi_vie=demi_vie,
                             facteur_2h=facteur_away_2h,
+                            facteur_ligue=facteur_ligue,
                             utiliser_zinb=utiliser_zinb)
     joint_home = build_joint(home["A1"], home["A2"])
     joint_away = build_joint(away["A1"], away["A2"])
@@ -170,4 +173,4 @@ def build_mc_global(hist_home, hist_away, demi_vie=DEMI_VIE_DEFAUT,
         "home": home, "away": away,
         "joint_home": joint_home, "joint_away": joint_away,
         "mc1_pmf": mc1_pmf, "mc2_pmf": mc2_pmf, "global_pmf": global_pmf,
-    }
+                    }
