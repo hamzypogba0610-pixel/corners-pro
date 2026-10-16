@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 12.0 : integrite + calibration.
+Version 13.0 : traces de debug dans /analyser.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,7 @@ from validation.backtest import (
 )
 
 
-app = FastAPI(title="corners-pro", version="1.2.0")
+app = FastAPI(title="corners-pro", version="1.3.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -94,7 +94,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 1.2.0 — intégrité + calibration</div>
+        <div class="info">Version 1.3.0 — debug intégré</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -120,8 +120,8 @@ def nouveau():
         <input name="date" required placeholder="2026-02-01">
         <label>Mode</label>
         <select name="mode">
-          <option value="COMPLET">COMPLET</option>
-          <option value="RAPIDE">RAPIDE</option>
+          <option value="RAPIDE">RAPIDE (15 s)</option>
+          <option value="COMPLET">COMPLET (45 s)</option>
         </select>
 
         <h2>2. Cotes 1X2 du match</h2>
@@ -417,7 +417,6 @@ def _fmt_ev(x):
 
 
 def _rendre_histogramme_pit(h):
-    """Rendu d'un histogramme PIT en HTML (barres verticales)."""
     if not h or h["n"] == 0:
         return '<p class="info">Pas de données PIT.</p>'
     counts = h["counts"]
@@ -454,7 +453,6 @@ def _badge_style(label):
 def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
     if not ligue:
         return ""
-
     connue = ligue.get("connue", False)
     if connue:
         statut_ligue = (
@@ -464,13 +462,11 @@ def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
         statut_ligue = (
             '<span class="warn">non reconnue — référence globale utilisée</span>'
         )
-
     taux = ligue.get("taux_reference", 10.0)
     ref = ligue.get("reference_globale", 10.0)
     ratio = ligue.get("ratio_brut", 1.0)
     exposant = ligue.get("exposant", 0.3)
     facteur = ligue.get("facteur", 1.0)
-
     return f"""
       <h2>Contexte championnat et style d'équipe</h2>
       <p class="info">
@@ -482,11 +478,9 @@ def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
         <b>facteur de ligue = {facteur:.4f}</b>
       </p>
       <p class="info" style="font-size:11px;">
-        ⚠️ La table des championnats est <b>approximative</b> (moyennes
-        publiques). Elle sert de repère pour normaliser entre ligues, elle
-        ne remplace pas tes données saisies.
+        ⚠️ La table des championnats est <b>approximative</b>. Elle sert
+        de repère pour normaliser entre ligues.
       </p>
-
       <h3>Style des équipes</h3>
       <table>
         <tr><th>Équipe</th><th>Style</th><th>Moy. équipe</th>
@@ -506,10 +500,6 @@ def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
           <td>{style_away.get("ratio", 1):.3f}</td>
         </tr>
       </table>
-      <p class="info" style="font-size:11px;">
-        Ratio &gt; 1.15 → offensif. Ratio &lt; 0.85 → défensif.
-        Moyenne équipe = (c1h + c2h) / match. Attendue = taux ligue / 2.
-      </p>
     """
 
 
@@ -520,34 +510,27 @@ def _rendre_integrite_calibration(integrite, cal_active, nb_marches):
         statut_int = '<span class="ok">✓ Intégrité validée</span>'
     else:
         statut_int = '<span class="err">✗ Intégrité compromise</span>'
-
     bloquants = integrite.get("problemes_bloquants", [])
     avertissements = integrite.get("avertissements", [])
-
     bloc_bloq = ""
     if bloquants:
         items = "".join(
             f"<li>{html_mod.escape(str(x))}</li>" for x in bloquants[:10]
         )
         bloc_bloq = f'<div class="raisons">Bloquants<ul>{items}</ul></div>'
-
     bloc_av = ""
     if avertissements:
         items = "".join(
             f"<li>{html_mod.escape(str(x))}</li>" for x in avertissements[:10]
         )
         bloc_av = f'<div class="raisons">Avertissements<ul>{items}</ul></div>'
-
     if cal_active:
-        statut_cal = (
-            '<span class="ok">✓ Calibration active</span>'
-        )
+        statut_cal = '<span class="ok">✓ Calibration active</span>'
     else:
         statut_cal = (
             '<span class="info">Calibration inactive — '
-            'nécessite des données réelles (50+ prédictions terminées)</span>'
+            'nécessite des données réelles (50+ prédictions)</span>'
         )
-
     return f"""
       <h2>Couche d'intégrité et calibration</h2>
       <p class="info">
@@ -567,16 +550,13 @@ def _rendre_ligne_pari(nom, cote_nom, c, match_label):
     ev_info = c["ev_info"]
     ic_bas = ev_info["ic80_bas"]
     ic_haut = ev_info["ic80_haut"]
-
     raisons_html = ""
     if not gate["accepte"] and gate["raisons_refus"]:
         items = "".join(f"<li>{r}</li>" for r in gate["raisons_refus"])
         raisons_html = f'<div class="raisons">Pourquoi ce refus ?<ul>{items}</ul></div>'
-
     m_esc = html_mod.escape(match_label, quote=True)
     nom_esc = html_mod.escape(nom, quote=True)
     label_esc = html_mod.escape(label, quote=True)
-
     bouton_html = ""
     if gate["accepte"]:
         bouton_html = (
@@ -591,16 +571,11 @@ def _rendre_ligne_pari(nom, cote_nom, c, match_label):
             f'data-ligne="0">'
             f'📌 Enregistrer cette prédiction</button>'
         )
-
-    # Affichage p brut vs p calibree si different
     p_brut = c.get("p_brut", c["p"])
     calibree = c.get("calibree", False)
     ligne_p = f"{_fmt_pct(c['p'])}"
     if calibree and abs(p_brut - c["p"]) > 1e-6:
-        ligne_p += (
-            f'<br><span class="ic80">brut {p_brut*100:.2f}%</span>'
-        )
-
+        ligne_p += f'<br><span class="ic80">brut {p_brut*100:.2f}%</span>'
     return f"""
       <tr>
         <td><b>{label}</b></td>
@@ -725,8 +700,7 @@ def _rendre_zero_inflation(zi):
     return f"""
       <h2>Inflation de zéros</h2>
       <p class="info">
-        Test : P(0) observé vs P(0) attendu sous NB. Si l'écart dépasse 5 pts
-        (avec shrinkage), on bascule sur ZINB (zero-inflated NB).
+        Test : P(0) observé vs P(0) attendu sous NB.
       </p>
       <table>
         <tr><th>Ligne</th><th>P(0) observé</th><th>P(0) NB</th>
@@ -739,9 +713,17 @@ def _rendre_zero_inflation(zi):
     """
 
 
-def _rendre_tornade(stabilite):
+def _rendre_tornade(stabilite, mode_utilise="COMPLET"):
     if not stabilite:
         return ""
+    if mode_utilise == "RAPIDE":
+        return """
+          <h2>Test de sensibilité (tornade)</h2>
+          <p class="info">
+            ⚡ <b>Mode RAPIDE</b> — tornade désactivée pour accélérer l'analyse.
+            Relance en mode COMPLET pour obtenir les 3 scénarios de robustesse.
+          </p>
+        """
     rows = []
     for (m, c), info in stabilite.items():
         stable = info["stable"]
@@ -759,10 +741,7 @@ def _rendre_tornade(stabilite):
     return f"""
       <h2>Test de sensibilité (tornade)</h2>
       <p class="info">
-        7 scénarios testés : moyenne ±15 %, demi-vie 6/10,
-        indépendance forcée, dépendance forte, retrait extrêmes.
-        Une ligne qui change de décision dans <b>au moins un</b> scénario
-        est marquée <span class="err">FRAGILE</span> et rejetée (critère 5).
+        3 scénarios testés : moyenne ±15 %, retrait extrêmes.
       </p>
       <table>
         <tr><th>Ligne</th><th>Stabilité</th><th>Scénarios</th><th>Flips</th></tr>
@@ -773,10 +752,25 @@ def _rendre_tornade(stabilite):
 
 @app.post("/analyser", response_class=HTMLResponse)
 async def analyser(request: Request):
-    form = await request.form()
+    print("=== DEBUG /analyser : reception du formulaire ===", flush=True)
+    try:
+        form = await request.form()
+    except Exception as e:
+        print(f"=== DEBUG : erreur lecture form : {e}", flush=True)
+        return _page("Erreur interne", f"""
+          <h1 class="err">Erreur de réception</h1>
+          <div class="card"><pre>{type(e).__name__} : {e}</pre></div>
+        """)
+
+    print(f"=== DEBUG : cles recues = {list(form.keys())}", flush=True)
+    print(f"=== DEBUG : mode = {form.get('mode', 'ABSENT')}", flush=True)
+
     try:
         hist_home = parser_historique(form["home_history"], "H", form["home_team"], 15)
+        print(f"=== DEBUG : hist_home OK ({len(hist_home)} matchs)", flush=True)
         hist_away = parser_historique(form["away_history"], "A", form["away_team"], 15)
+        print(f"=== DEBUG : hist_away OK ({len(hist_away)} matchs)", flush=True)
+        print("=== DEBUG : lancement analyser_match ===", flush=True)
         data = {
             "match": {
                 "competition": form["competition"].strip(),
@@ -805,13 +799,18 @@ async def analyser(request: Request):
             },
         }
         rapport = analyser_match(data)
+        print("=== DEBUG : analyser_match OK ===", flush=True)
     except ValidationError as e:
+        print(f"=== DEBUG : ValidationError = {e}", flush=True)
         return _page("Erreur de saisie", f"""
           <h1 class="err">Erreur de saisie</h1>
           <div class="card"><pre>{e}</pre></div>
           <p style="margin-top:20px;"><a href="/nouveau">← Corriger</a></p>
         """)
     except Exception as e:
+        import traceback
+        print("=== DEBUG : EXCEPTION ===", flush=True)
+        print(traceback.format_exc(), flush=True)
         return _page("Erreur interne", f"""
           <h1 class="err">Erreur interne</h1>
           <div class="card"><pre>{type(e).__name__} : {e}</pre></div>
@@ -821,12 +820,10 @@ async def analyser(request: Request):
     verdict = rapport["verdict"]
     ok = bool(rapport["selections_acceptees"])
     classe = "verdict-oui" if ok else "verdict-non"
-
     match_label = (
         f"{rapport['match']['home_team']} vs {rapport['match']['away_team']} "
         f"({rapport['match']['date']})"
     )
-
     bloc_marches = "".join(
         _rendre_marche(nom, info, match_label)
         for nom, info in rapport["marches"].items()
@@ -836,7 +833,8 @@ async def analyser(request: Request):
     effet_score_html = _rendre_effet_score(rapport.get("score_effect"))
     dependance_html = _rendre_dependance_inter(rapport.get("dependance_inter"))
     zi_html = _rendre_zero_inflation(rapport.get("zero_inflation"))
-    tornade_html = _rendre_tornade(rapport.get("stabilite"))
+    mode_utilise = rapport.get("mode_utilise", "COMPLET")
+    tornade_html = _rendre_tornade(rapport.get("stabilite"), mode_utilise)
     ligue_style_html = _rendre_ligue_style(
         rapport.get("ligue"),
         rapport.get("style_home", {}),
@@ -849,12 +847,14 @@ async def analyser(request: Request):
         rapport.get("calibration_active", False),
         len(rapport.get("marches", {})),
     )
+    print("=== DEBUG : rendu HTML OK ===", flush=True)
 
     return _page("Rapport", f"""
       <h1>Rapport</h1>
       <p class="info">
         {rapport['match']['home_team']} vs {rapport['match']['away_team']}
         — {rapport['match']['date']} — {rapport['match']['competition']}
+        — <b>Mode {mode_utilise}</b>
       </p>
       <div class="verdict {classe}">{verdict}</div>
 
@@ -905,4 +905,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "1.2.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "1.3.0"}
