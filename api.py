@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 13.0 : traces de debug dans /analyser.
+Version 13.1 : correction _fmt_pct + traces de debug.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,7 @@ from validation.backtest import (
 )
 
 
-app = FastAPI(title="corners-pro", version="1.3.0")
+app = FastAPI(title="corners-pro", version="1.3.1")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -94,7 +94,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 1.3.0 — debug intégré</div>
+        <div class="info">Version 1.3.1 — bug corrigé</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -137,7 +137,7 @@ def nouveau():
         <div class="encadre">
           <b>📋 Règle de saisie :</b><br>
           • <b>10 premiers matchs</b> = matchs joués <b>à domicile</b><br>
-          • <b>5 derniers matchs</b> = matchs <b>globaux</b> (domicile, extérieur ou neutre)
+          • <b>5 derniers matchs</b> = matchs <b>globaux</b>
         </div>
         <div class="info">
           <code>date,adversaire,c1h,c2h,rf,rmt,rouge,xg,xga,xgot,xgota</code>
@@ -162,7 +162,7 @@ def nouveau():
         <div class="encadre">
           <b>📋 Règle de saisie :</b><br>
           • <b>10 premiers matchs</b> = matchs joués <b>à l'extérieur</b><br>
-          • <b>5 derniers matchs</b> = matchs <b>globaux</b> (domicile, extérieur ou neutre)
+          • <b>5 derniers matchs</b> = matchs <b>globaux</b>
         </div>
         <div class="barre-equipe">
           <select id="select_away">
@@ -223,8 +223,7 @@ def equipes():
     return _page("Mes équipes", """
       <h1>Mes équipes</h1>
       <div class="card">
-        <div class="info">Ces équipes sont stockées dans <b>ce navigateur</b>.
-        Si tu changes de téléphone, exporte d'abord.</div>
+        <div class="info">Ces équipes sont stockées dans <b>ce navigateur</b>.</div>
         <button type="button" class="btn-sec" onclick="exporterTout()">⬇️ Exporter tout</button>
         <label style="margin-top:12px;">Importer un fichier JSON</label>
         <input type="file" accept=".json" onchange="importerFichier(this)">
@@ -294,12 +293,7 @@ def page_backtest():
 
     return _page("Backtest", f"""
       <h1>Backtest glissant</h1>
-      <p class="info">
-        80 matchs simulés — pour chaque match à partir du 25e,
-        on utilise uniquement les matchs antérieurs pour prédire.<br>
-        <b>Aucune fuite d'information.</b>
-      </p>
-
+      <p class="info">80 matchs simulés — rolling origin, sans fuite.</p>
       <h2>Métriques principales</h2>
       <table>
         <tr><th>Marché</th><th>n</th><th>Brier</th><th>Brier baseline</th>
@@ -308,18 +302,8 @@ def page_backtest():
         {_bloc("MC2 (12.5)", r_mc2)}
         {_bloc("GLOBAL (25.5)", r_glo)}
       </table>
-
       <h2>Histogramme PIT (MC1)</h2>
       {hist_html}
-
-      <h2>Interprétation</h2>
-      <p class="info">
-        <b>Brier</b> : erreur quadratique (0 = parfait, 0.25 = hasard).<br>
-        <b>Gain</b> : amélioration par rapport au hasard (0.5 systématique).<br>
-        <b>RPS</b> : erreur sur toute la distribution (plus bas = mieux).<br>
-        <b>PIT</b> : si l'histogramme est plat, les probabilités sont bien calibrées.
-      </p>
-
       <p style="margin-top:24px;"><a href="/">← Accueil</a></p>
     """)
 
@@ -329,18 +313,12 @@ def page_suivi():
     return _page("Mon suivi", """
       <h1>Mon suivi de prédictions</h1>
       <div class="card">
-        <div class="info">
-          Toutes tes prédictions enregistrées. Marque le résultat après le match
-          pour voir ta performance réelle.
-        </div>
         <button type="button" class="btn-sec" onclick="exporterSuivi()">⬇️ Exporter</button>
         <label style="margin-top:12px;">Importer un fichier JSON</label>
         <input type="file" accept=".json" onchange="importerSuivi(this)">
       </div>
-
       <div id="stats"></div>
       <div id="liste" style="margin-top:16px;"></div>
-
       <p style="margin-top:20px;"><a href="/">← Accueil</a></p>
     """, scripts="""
       <script src="/static/suivi.js"></script>
@@ -359,13 +337,12 @@ def page_suivi():
                 <tr><th>EV réalisé moyen</th><td>${stats.ev_reel_moyen.toFixed(4)}</td></tr>
                 <tr><th>Taux de réussite</th><td>${stats.taux_reussite.toFixed(1)}%</td></tr>
                 <tr><th>ROI</th><td style="color:${pnlColor};"><b>${stats.roi.toFixed(2)}%</b></td></tr>
-                <tr><th>P&L (unités de mise)</th><td style="color:${pnlColor};">${stats.pnl.toFixed(2)}</td></tr>
+                <tr><th>P&L</th><td style="color:${pnlColor};">${stats.pnl.toFixed(2)}</td></tr>
               </table>
             `;
           } else {
-            statsEl.innerHTML = '<p class="info">Aucune prédiction terminée pour le moment.</p>';
+            statsEl.innerHTML = '<p class="info">Aucune prédiction terminée.</p>';
           }
-
           const preds = lireSuivi();
           const liste = document.getElementById("liste");
           if (preds.length === 0) {
@@ -383,22 +360,15 @@ def page_suivi():
             const dateShort = (p.date_enregistrement || "").slice(0, 10);
             html += `
               <div class="card">
-                <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-                  <div>
-                    <b>${p.match}</b><br>
-                    <span class="info">${p.marche} ${p.pari} — ligne ${p.ligne} — cote ${p.cote}</span><br>
-                    <span class="info">p estimée : ${(p.p_estime*100).toFixed(2)}% — EV prévu : ${p.ev_prevu.toFixed(4)}</span><br>
-                    <span class="info">${dateShort}</span>
-                  </div>
-                  <div style="text-align:right;">
-                    ${badge}<br>
-                    <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end;">
-                      <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'gagne')">Gagné</button>
-                      <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'perdu')">Perdu</button>
-                      <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'push')">Push</button>
-                      <button type="button" class="btn-sec" onclick="if(supprimerPrediction('${p.id}')) location.reload();">🗑️</button>
-                    </div>
-                  </div>
+                <b>${p.match}</b><br>
+                <span class="info">${p.marche} ${p.pari} — ligne ${p.ligne} — cote ${p.cote}</span><br>
+                <span class="info">p : ${(p.p_estime*100).toFixed(2)}% — EV : ${p.ev_prevu.toFixed(4)}</span><br>
+                <span class="info">${dateShort}</span> ${badge}
+                <div style="margin-top:8px;">
+                  <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'gagne')">Gagné</button>
+                  <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'perdu')">Perdu</button>
+                  <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'push')">Push</button>
+                  <button type="button" class="btn-sec" onclick="if(supprimerPrediction('${p.id}')) location.reload();">🗑️</button>
                 </div>
               </div>
             `;
@@ -434,9 +404,7 @@ def _rendre_histogramme_pit(h):
                   border-radius:6px; margin-top:8px;">
         {barres}
       </div>
-      <p class="info">
-        n = {h['n']}. Barre plate = bonne calibration. Pic au centre = trop confiant.
-      </p>
+      <p class="info">n = {h['n']}. Barre plate = bonne calibration.</p>
     """
 
 
@@ -460,7 +428,7 @@ def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
         )
     else:
         statut_ligue = (
-            '<span class="warn">non reconnue — référence globale utilisée</span>'
+            '<span class="warn">non reconnue — référence globale</span>'
         )
     taux = ligue.get("taux_reference", 10.0)
     ref = ligue.get("reference_globale", 10.0)
@@ -472,14 +440,13 @@ def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
       <p class="info">
         Compétition : <b>{html_mod.escape(str(ligue.get("competition", "")))}</b>
         — {statut_ligue}<br>
-        Taux de référence du championnat : <b>{taux:.2f}</b> corners/match
-        (référence globale : {ref:.1f})<br>
+        Taux de référence : <b>{taux:.2f}</b> corners/match
+        (référence : {ref:.1f})<br>
         Ratio brut : {ratio:.3f} → exposant {exposant} →
         <b>facteur de ligue = {facteur:.4f}</b>
       </p>
       <p class="info" style="font-size:11px;">
-        ⚠️ La table des championnats est <b>approximative</b>. Elle sert
-        de repère pour normaliser entre ligues.
+        ⚠️ Table approximative des championnats.
       </p>
       <h3>Style des équipes</h3>
       <table>
@@ -529,7 +496,7 @@ def _rendre_integrite_calibration(integrite, cal_active, nb_marches):
     else:
         statut_cal = (
             '<span class="info">Calibration inactive — '
-            'nécessite des données réelles (50+ prédictions)</span>'
+            'nécessite 50+ prédictions</span>'
         )
     return f"""
       <h2>Couche d'intégrité et calibration</h2>
@@ -666,10 +633,10 @@ def _rendre_dependance_inter(dep):
     return f"""
       <h2>Dépendance inter-équipes (MC1 ↔ MC2)</h2>
       <p class="info">
-        Proxy utilisé : corr(corners totaux équipe, xG concédés).<br>
+        Proxy : corr(corners totaux, xG concédés).<br>
         Estimation sur {n} matchs — méthode : {methode}<br>
-        <b>ρ (Pearson)</b> = {rho:.3f} | τ (Kendall) = {tau:.3f} | θ (copule) = {theta:.3f}<br>
-        Seuil d'activation : |ρ| ≥ 0.10 — {statut}
+        <b>ρ</b> = {rho:.3f} | <b>τ</b> = {tau:.3f} | <b>θ</b> = {theta:.3f}<br>
+        Seuil : |ρ| ≥ 0.10 — {statut}
       </p>
     """
 
@@ -699,9 +666,7 @@ def _rendre_zero_inflation(zi):
 
     return f"""
       <h2>Inflation de zéros</h2>
-      <p class="info">
-        Test : P(0) observé vs P(0) attendu sous NB.
-      </p>
+      <p class="info">Test : P(0) observé vs P(0) attendu sous NB.</p>
       <table>
         <tr><th>Ligne</th><th>P(0) observé</th><th>P(0) NB</th>
             <th>Écart</th><th>π (ajusté)</th><th>Statut</th></tr>
@@ -720,8 +685,8 @@ def _rendre_tornade(stabilite, mode_utilise="COMPLET"):
         return """
           <h2>Test de sensibilité (tornade)</h2>
           <p class="info">
-            ⚡ <b>Mode RAPIDE</b> — tornade désactivée pour accélérer l'analyse.
-            Relance en mode COMPLET pour obtenir les 3 scénarios de robustesse.
+            ⚡ <b>Mode RAPIDE</b> — tornade désactivée. Relance en mode
+            COMPLET pour obtenir les scénarios de robustesse.
           </p>
         """
     rows = []
@@ -740,9 +705,7 @@ def _rendre_tornade(stabilite, mode_utilise="COMPLET"):
         """)
     return f"""
       <h2>Test de sensibilité (tornade)</h2>
-      <p class="info">
-        3 scénarios testés : moyenne ±15 %, retrait extrêmes.
-      </p>
+      <p class="info">3 scénarios : moyenne ±15 %, retrait extrêmes.</p>
       <table>
         <tr><th>Ligne</th><th>Stabilité</th><th>Scénarios</th><th>Flips</th></tr>
         {''.join(rows)}
@@ -752,24 +715,24 @@ def _rendre_tornade(stabilite, mode_utilise="COMPLET"):
 
 @app.post("/analyser", response_class=HTMLResponse)
 async def analyser(request: Request):
-    print("=== DEBUG /analyser : reception du formulaire ===", flush=True)
+    print("=== DEBUG /analyser : reception ===", flush=True)
     try:
         form = await request.form()
     except Exception as e:
-        print(f"=== DEBUG : erreur lecture form : {e}", flush=True)
+        print(f"=== DEBUG : erreur form = {e}", flush=True)
         return _page("Erreur interne", f"""
           <h1 class="err">Erreur de réception</h1>
           <div class="card"><pre>{type(e).__name__} : {e}</pre></div>
         """)
 
-    print(f"=== DEBUG : cles recues = {list(form.keys())}", flush=True)
+    print(f"=== DEBUG : cles = {list(form.keys())}", flush=True)
     print(f"=== DEBUG : mode = {form.get('mode', 'ABSENT')}", flush=True)
 
     try:
         hist_home = parser_historique(form["home_history"], "H", form["home_team"], 15)
-        print(f"=== DEBUG : hist_home OK ({len(hist_home)} matchs)", flush=True)
+        print(f"=== DEBUG : hist_home OK ({len(hist_home)})", flush=True)
         hist_away = parser_historique(form["away_history"], "A", form["away_team"], 15)
-        print(f"=== DEBUG : hist_away OK ({len(hist_away)} matchs)", flush=True)
+        print(f"=== DEBUG : hist_away OK ({len(hist_away)})", flush=True)
         print("=== DEBUG : lancement analyser_match ===", flush=True)
         data = {
             "match": {
@@ -905,4 +868,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "1.3.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "1.3.1"}
