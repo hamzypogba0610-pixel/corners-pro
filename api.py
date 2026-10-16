@@ -394,12 +394,12 @@ def page_suivi():
       </script>
     """)
 
-    def _badge_style(label):
+def _badge_style(label):
     if label == "offensif":
         return '<span class="badge badge-off">⚔️ OFFENSIF</span>'
-    if label == "defensif":
+    elif label == "defensif":
         return '<span class="badge badge-def">🛡️ DÉFENSIF</span>'
-    if label == "equilibre":
+    elif label == "equilibre":
         return '<span class="badge badge-eq">⚖️ ÉQUILIBRÉ</span>'
     return '<span class="badge badge-eq">? inconnu</span>'
 
