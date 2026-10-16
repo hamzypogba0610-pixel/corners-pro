@@ -1,11 +1,12 @@
 """
 Serveur web du bot corners-pro.
-Version 8.0 : backtest glissant integre.
+Version 9.0 : suivi de performance des predictions.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import os
+import html as html_mod
 
 from data.schema import ValidationError
 from core.analysis import parser_historique, analyser_match
@@ -14,7 +15,7 @@ from validation.backtest import (
 )
 
 
-app = FastAPI(title="corners-pro", version="0.8.0")
+app = FastAPI(title="corners-pro", version="0.9.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -86,11 +87,12 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 0.8.0 — backtest intégré</div>
+        <div class="info">Version 0.9.0 — suivi de performance</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
       <p style="margin-top:8px;"><a href="/backtest">→ Lancer un backtest</a></p>
+      <p style="margin-top:8px;"><a href="/suivi">→ Mon suivi de prédictions</a></p>
     """)
 
 
@@ -303,6 +305,92 @@ def page_backtest():
 
       <p style="margin-top:24px;"><a href="/">← Accueil</a></p>
     """)
+
+
+@app.get("/suivi", response_class=HTMLResponse)
+def page_suivi():
+    return _page("Mon suivi", """
+      <h1>Mon suivi de prédictions</h1>
+      <div class="card">
+        <div class="info">
+          Toutes tes prédictions enregistrées. Marque le résultat après le match
+          pour voir ta performance réelle.
+        </div>
+        <button type="button" class="btn-sec" onclick="exporterSuivi()">⬇️ Exporter</button>
+        <label style="margin-top:12px;">Importer un fichier JSON</label>
+        <input type="file" accept=".json" onchange="importerSuivi(this)">
+      </div>
+
+      <div id="stats"></div>
+      <div id="liste" style="margin-top:16px;"></div>
+
+      <p style="margin-top:20px;"><a href="/">← Accueil</a></p>
+    """, scripts="""
+      <script src="/static/suivi.js"></script>
+      <script>
+        document.addEventListener("DOMContentLoaded", function() {
+          const stats = calculerStatsSuivi();
+          const statsEl = document.getElementById("stats");
+          if (stats.n > 0) {
+            const pnlColor = stats.pnl > 0 ? "#3fb950" : "#f85149";
+            statsEl.innerHTML = `
+              <h2>Performance réelle</h2>
+              <table>
+                <tr><th>Prédictions terminées</th><td>${stats.n}</td></tr>
+                <tr><th>Brier score</th><td>${stats.brier.toFixed(4)}</td></tr>
+                <tr><th>EV prévu moyen</th><td>${stats.ev_prevu_moyen.toFixed(4)}</td></tr>
+                <tr><th>EV réalisé moyen</th><td>${stats.ev_reel_moyen.toFixed(4)}</td></tr>
+                <tr><th>Taux de réussite</th><td>${stats.taux_reussite.toFixed(1)}%</td></tr>
+                <tr><th>ROI</th><td style="color:${pnlColor};"><b>${stats.roi.toFixed(2)}%</b></td></tr>
+                <tr><th>P&L (unités de mise)</th><td style="color:${pnlColor};">${stats.pnl.toFixed(2)}</td></tr>
+              </table>
+            `;
+          } else {
+            statsEl.innerHTML = '<p class="info">Aucune prédiction terminée pour le moment.</p>';
+          }
+
+          const preds = lireSuivi();
+          const liste = document.getElementById("liste");
+          if (preds.length === 0) {
+            liste.innerHTML = '<p class="info">Aucune prédiction enregistrée.</p>';
+            return;
+          }
+          let html = '<h2>Historique</h2>';
+          for (const p of preds) {
+            const res = p.resultat_reel || "—";
+            let badge = "";
+            if (res === "gagne") badge = '<span class="ok">✓ GAGNÉ</span>';
+            else if (res === "perdu") badge = '<span class="err">✗ PERDU</span>';
+            else if (res === "push") badge = '<span class="warn">push</span>';
+            else badge = '<span class="info">en attente</span>';
+            const dateShort = (p.date_enregistrement || "").slice(0, 10);
+            html += `
+              <div class="card">
+                <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                  <div>
+                    <b>${p.match}</b><br>
+                    <span class="info">${p.marche} ${p.pari} — ligne ${p.ligne} — cote ${p.cote}</span><br>
+                    <span class="info">p estimée : ${(p.p_estime*100).toFixed(2)}% — EV prévu : ${p.ev_prevu.toFixed(4)}</span><br>
+                    <span class="info">${dateShort}</span>
+                  </div>
+                  <div style="text-align:right;">
+                    ${badge}<br>
+                    <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end;">
+                      <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'gagne')">Gagné</button>
+                      <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'perdu')">Perdu</button>
+                      <button type="button" class="btn-sec" onclick="setResultat('${p.id}', 'push')">Push</button>
+                      <button type="button" class="btn-sec" onclick="if(supprimerPrediction('${p.id}')) location.reload();">🗑️</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+          liste.innerHTML = html;
+        });
+      </script>
+    """)
+
     def _fmt_pct(x):
         return f"{x*100:.2f}%"
 
@@ -336,7 +424,7 @@ def _rendre_histogramme_pit(h):
     """
 
 
-def _rendre_ligne_pari(nom, cote_nom, c):
+def _rendre_ligne_pari(nom, cote_nom, c, match_label):
     label = cote_nom.upper()
     gate = c["gate"]
     couleur = "ok" if gate["accepte"] else "err"
@@ -344,10 +432,31 @@ def _rendre_ligne_pari(nom, cote_nom, c):
     ev_info = c["ev_info"]
     ic_bas = ev_info["ic80_bas"]
     ic_haut = ev_info["ic80_haut"]
+
     raisons_html = ""
     if not gate["accepte"] and gate["raisons_refus"]:
         items = "".join(f"<li>{r}</li>" for r in gate["raisons_refus"])
         raisons_html = f'<div class="raisons">Pourquoi ce refus ?<ul>{items}</ul></div>'
+
+    m_esc = html_mod.escape(match_label, quote=True)
+    nom_esc = html_mod.escape(nom, quote=True)
+    label_esc = html_mod.escape(label, quote=True)
+
+    bouton_html = ""
+    if gate["accepte"]:
+        bouton_html = (
+            f'<button type="button" class="btn-sec" '
+            f'onclick="enregistrerDepuisRapport(this)" '
+            f'data-match="{m_esc}" '
+            f'data-marche="{nom_esc}" '
+            f'data-pari="{label_esc}" '
+            f'data-cote="{c["cote"]}" '
+            f'data-p="{c["p"]}" '
+            f'data-ev="{ev_info["ev_mediane"]}" '
+            f'data-ligne="0">'
+            f'📌 Enregistrer cette prédiction</button>'
+        )
+
     return f"""
       <tr>
         <td><b>{label}</b></td>
@@ -361,13 +470,14 @@ def _rendre_ligne_pari(nom, cote_nom, c):
         <td class="{couleur}">{statut}</td>
       </tr>
       <tr><td colspan="7" style="padding:0; border:none;">{raisons_html}</td></tr>
+      <tr><td colspan="7" style="padding:4px 0 12px 0; border:none;">{bouton_html}</td></tr>
     """
 
 
-def _rendre_marche(nom, info):
+def _rendre_marche(nom, info, match_label):
     rows = (
-        _rendre_ligne_pari(nom, "over", info["cotes"]["over"])
-        + _rendre_ligne_pari(nom, "under", info["cotes"]["under"])
+        _rendre_ligne_pari(nom, "over", info["cotes"]["over"], match_label)
+        + _rendre_ligne_pari(nom, "under", info["cotes"]["under"], match_label)
     )
     return f"""
       <h3>{nom} — ligne {info['ligne']}</h3>
@@ -389,10 +499,12 @@ def _rendre_effet_score(se):
     ha = se["ht_away"]
     ratios = se["ratios"]
     sr = se.get("stats_ratios", {})
+
     def _r(s):
         if s in sr:
             return f"{ratios[s]:.3f} (n={sr[s]['n']})"
         return f"{ratios[s]:.3f}"
+
     return f"""
       <h2>Effet score (pondération 2e MT)</h2>
       <p class="info">
@@ -446,6 +558,7 @@ def _rendre_dependance_inter(dep):
 def _rendre_zero_inflation(zi):
     if not zi:
         return ""
+
     def _bloc(label, info):
         if not info:
             return ""
@@ -464,6 +577,7 @@ def _rendre_zero_inflation(zi):
             <td>{statut}</td>
           </tr>
         """
+
     return f"""
       <h2>Inflation de zéros</h2>
       <p class="info">
@@ -563,8 +677,15 @@ async def analyser(request: Request):
     verdict = rapport["verdict"]
     ok = bool(rapport["selections_acceptees"])
     classe = "verdict-oui" if ok else "verdict-non"
+
+    match_label = (
+        f"{rapport['match']['home_team']} vs {rapport['match']['away_team']} "
+        f"({rapport['match']['date']})"
+    )
+
     bloc_marches = "".join(
-        _rendre_marche(nom, info) for nom, info in rapport["marches"].items()
+        _rendre_marche(nom, info, match_label)
+        for nom, info in rapport["marches"].items()
     )
     stats = rapport["stats"]
     s_mc1 = stats["MC1"]; s_mc2 = stats["MC2"]; s_glo = stats["GLOBAL"]
@@ -619,9 +740,9 @@ async def analyser(request: Request):
       </p>
 
       <p style="margin-top:24px;"><a href="/nouveau">← Nouvelle analyse</a></p>
-    """)
+    """, scripts='<script src="/static/suivi.js"></script>')
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "0.8.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "0.9.0"}
