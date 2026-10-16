@@ -1,7 +1,8 @@
 """
 Orchestrateur : de la saisie au verdict.
-Integre : ponderation temporelle, IC80, effet score, dependance inter-equipes,
-inflation de zeros, et test de sensibilite (tornade).
+Integre : ponderation temporelle (age + lieu), IC80, effet score,
+dependance inter-equipes, inflation de zeros, et tornade.
+Repartition : 10 matchs au lieu + 5 matchs globaux ('N').
 """
 import numpy as np
 from data.schema import valider_match, ValidationError
@@ -24,15 +25,24 @@ from decision.gate import evaluer_selection
 
 MARCHES = ("MC1", "MC2", "GLOBAL")
 COTES = ("over", "under")
+N_MATCHS_LIEU = 10
+N_MATCHS_GLOBAUX = 5
 
 
-def parser_historique(texte, venue, equipe, lignes_attendues=15):
+def parser_historique(texte, venue_attendu, equipe, lignes_attendues=15):
+    """
+    Parse un bloc CSV.
+    Les 10 premieres lignes utiles sont considerees au lieu specifie.
+    Les 5 suivantes sont marquees 'N' (globales).
+    """
     erreurs = []
     matchs = []
+    ligne_utile = 0
     for i, ligne in enumerate(texte.strip().splitlines(), start=1):
         ligne = ligne.strip()
         if not ligne or ligne.startswith("#"):
             continue
+        ligne_utile += 1
         parts = [p.strip() for p in ligne.split(",")]
         if len(parts) != 11:
             erreurs.append(
@@ -54,7 +64,7 @@ def parser_historique(texte, venue, equipe, lignes_attendues=15):
                 "xgot_pour": float(parts[9]),
                 "xgot_contre": float(parts[10]),
             }
-            m["venue"] = venue
+            m["venue"] = venue_attendu if ligne_utile <= N_MATCHS_LIEU else "N"
             matchs.append(m)
         except (ValueError, IndexError) as e:
             erreurs.append(f"Ligne {i} : conversion impossible ({e})")
@@ -70,14 +80,6 @@ def parser_historique(texte, venue, equipe, lignes_attendues=15):
     return matchs
 
 
-def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
-    p_centre = max(1e-6, min(1 - 1e-6, p_centre))
-    a = p_centre * n_effectif
-    b = (1 - p_centre) * n_effectif
-    rng = np.random.default_rng(seed)
-    return rng.beta(a, b, n_samples)
-
-
 def _build_pmf_par_equipe(hist, facteur_2h=1.0, demi_vie=8):
     pmfs = build_pmf_equipe(hist, demi_vie=demi_vie, facteur_2h=facteur_2h)
     a1 = pmfs["A1"]; a2 = pmfs["A2"]
@@ -87,14 +89,19 @@ def _build_pmf_par_equipe(hist, facteur_2h=1.0, demi_vie=8):
     return joint, info_cop, pmfs
 
 
+def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
+    p_centre = max(1e-6, min(1 - 1e-6, p_centre))
+    a = p_centre * n_effectif
+    b = (1 - p_centre) * n_effectif
+    rng = np.random.default_rng(seed)
+    return rng.beta(a, b, n_samples)
+
+
 def _pipeline(data, params=None):
     """
     Pipeline complet avec parametres ajustables.
-    params : dict pouvant contenir :
-      - demi_vie : int (defaut 8)
-      - facteur_moyenne : float (defaut 1.0)
-      - retirer_extremes : int (defaut 0)
-      - rho_force : float ou None (defaut None = estimation)
+    params peut contenir : demi_vie, facteur_moyenne, retirer_extremes,
+    rho_force.
     """
     params = params or {}
     demi_vie = params.get("demi_vie", 8)
@@ -112,7 +119,6 @@ def _pipeline(data, params=None):
         hist_home = hist_home_0
         hist_away = hist_away_0
 
-    # Effet score (toujours sur l'historique original)
     score_info = calculer_facteurs_match(hist_home_0, hist_away_0, data["odds_1x2"])
     f_home = score_info["facteur_home_2h"]
     f_away = score_info["facteur_away_2h"]
@@ -127,7 +133,6 @@ def _pipeline(data, params=None):
     mc1_pmf = product_pmf(joint_home)
     mc2_pmf = product_pmf(joint_away)
 
-    # Dependance inter-equipes
     if rho_force is not None:
         rho = float(rho_force)
         methode_rho = "force"
@@ -215,7 +220,7 @@ def _pipeline(data, params=None):
             "p_implicite_sans_marge": pi_over_prop,
             "ev_p20": ev_over_info["ev_p20"],
             "spread_modeles": abs(pi_over_prop - pi_over_pow),
-            "stable_sensibilite": True,  # provisoire, ajuste apres tornade
+            "stable_sensibilite": True,
             "ic80_largeur": ev_over_info["ic80_largeur"],
             "contexte": ctx,
         }
@@ -283,7 +288,11 @@ def _pipeline(data, params=None):
 
 
 def _decision(rapport, marche, cote):
-    return "accept" if rapport["marches"][marche]["cotes"][cote]["gate"]["accepte"] else "reject"
+    return (
+        "accept"
+        if rapport["marches"][marche]["cotes"][cote]["gate"]["accepte"]
+        else "reject"
+    )
 
 
 def _recompute_verdict(rapport):
@@ -304,12 +313,10 @@ def analyser_match(data):
 
     base = _pipeline(data, {})
 
-    # Decisions de base
     base_decisions = {
         (m, c): _decision(base, m, c) for m in MARCHES for c in COTES
     }
 
-    # --- Tornade ---
     stabilite = {
         (m, c): {"stable": True, "flips": [], "scenarios": []}
         for m in MARCHES for c in COTES
@@ -318,7 +325,7 @@ def analyser_match(data):
     for sc_nom, sc_params in SCENARIOS:
         try:
             r = _pipeline(data, sc_params)
-        except Exception as e:
+        except Exception:
             continue
         for m in MARCHES:
             for c in COTES:
@@ -332,7 +339,6 @@ def analyser_match(data):
                     stabilite[(m, c)]["stable"] = False
                     stabilite[(m, c)]["flips"].append(sc_nom)
 
-    # --- Post-filtre : rejeter toute ligne instable ---
     for m in MARCHES:
         for c in COTES:
             st = stabilite[(m, c)]
@@ -344,10 +350,6 @@ def analyser_match(data):
                         "Critère 5 — instabilité en sensibilité "
                         "(flips : " + ", ".join(st["flips"]) + ")"
                     )
-            else:
-                # Marquer explicitement comme stable dans le gate
-                if "Critère 5" not in " ".join(gate["raisons_refus"]):
-                    gate["stable_sensibilite"] = True
 
     _recompute_verdict(base)
     base["stabilite"] = stabilite
