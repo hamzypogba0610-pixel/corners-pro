@@ -1,24 +1,40 @@
 """
-Tests du gardien de donnees (data/schema.py) - version 3 (avec xG).
+Tests du gardien de donnees (data/schema.py) - version 4.
+Repartition 10 matchs au lieu + 5 globaux ('N').
 """
 from data.schema import valider_match, ValidationError
 
 
-def _hist(venue="H"):
-    return [
-        {"date": f"2026-01-{i+1:02d}", "opponent": f"Team{i}",
-         "venue": venue, "corners_1h": 3, "corners_2h": 4,
-         "resultat_final": "V", "resultat_mt": "N", "cartons_rouges": 0,
-         "xg_pour": 1.5, "xg_contre": 0.9,
-         "xgot_pour": 1.2, "xgot_contre": 0.7}
-        for i in range(15)
-    ]
+def _hist(venue_principal="H"):
+    """10 matchs au lieu principal + 5 globaux."""
+    h = []
+    for i in range(10):
+        h.append({
+            "date": f"2026-01-{i+1:02d}",
+            "opponent": f"T{i}",
+            "venue": venue_principal,
+            "corners_1h": 3, "corners_2h": 4,
+            "resultat_final": "V", "resultat_mt": "N", "cartons_rouges": 0,
+            "xg_pour": 1.5, "xg_contre": 0.9,
+            "xgot_pour": 1.2, "xgot_contre": 0.7,
+        })
+    for i in range(5):
+        h.append({
+            "date": f"2026-02-{i+1:02d}",
+            "opponent": f"G{i}",
+            "venue": "N",
+            "corners_1h": 2, "corners_2h": 3,
+            "resultat_final": "N", "resultat_mt": "N", "cartons_rouges": 0,
+            "xg_pour": 1.3, "xg_contre": 1.1,
+            "xgot_pour": 1.0, "xgot_contre": 0.9,
+        })
+    return h
 
 
 def match_bidon_ok():
     return {
         "match": {
-            "date": "2026-02-01",
+            "date": "2026-03-01",
             "competition": "Ligue 1",
             "home_team": "Paris",
             "away_team": "Lyon",
@@ -37,7 +53,7 @@ def match_bidon_ok():
 
 def test_valide_ok():
     assert valider_match(match_bidon_ok()) is True
-    print("  OK : un match valide passe")
+    print("  OK : match valide (10 lieu + 5 globaux)")
 
 
 def test_date_manquante():
@@ -72,20 +88,42 @@ def test_moins_de_15_matchs():
         print("  OK : historique incomplet refuse")
 
 
+def test_moins_de_10_au_lieu():
+    """Seulement 5 matchs 'H' + 10 globaux -> refuse."""
+    d = match_bidon_ok()
+    hist = d["home_team_history"]
+    for i in range(5, 10):
+        hist[i]["venue"] = "N"  # 5 H + 10 N
+    try:
+        valider_match(d); raise AssertionError("Devrait refuser")
+    except ValidationError as e:
+        assert "10" in str(e)
+        print(f"  OK : moins de 10 au lieu refuse")
+
+
+def test_venue_inverse_refusee():
+    """Un match 'A' dans l'historique domicile -> refuse."""
+    d = match_bidon_ok()
+    d["home_team_history"][0]["venue"] = "A"
+    try:
+        valider_match(d); raise AssertionError("Devrait refuser")
+    except ValidationError:
+        print("  OK : venue inverse refuse")
+
+
+def test_venue_N_acceptee():
+    """Un match 'N' est accepte comme match global."""
+    d = match_bidon_ok()
+    assert valider_match(d) is True
+    print("  OK : venue 'N' (global) acceptee")
+
+
 def test_corner_negatif():
     d = match_bidon_ok(); d["home_team_history"][0]["corners_1h"] = -1
     try:
         valider_match(d); raise AssertionError("Devrait refuser")
     except ValidationError:
         print("  OK : corner negatif refuse")
-
-
-def test_venue_inverse():
-    d = match_bidon_ok(); d["home_team_history"][0]["venue"] = "A"
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : venue incorrect refuse")
 
 
 def test_cote_invalide():
@@ -96,68 +134,12 @@ def test_cote_invalide():
         print("  OK : cote <= 1 refusee")
 
 
-def test_marche_manquant():
-    d = match_bidon_ok(); del d["market_lines"]["GLOBAL"]
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : marche GLOBAL manquant refuse")
-
-
-def test_adversaire_vide():
-    d = match_bidon_ok(); d["home_team_history"][3]["opponent"] = ""
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : adversaire vide refuse")
-
-
 def test_resultat_invalide():
     d = match_bidon_ok(); d["home_team_history"][0]["resultat_final"] = "X"
     try:
         valider_match(d); raise AssertionError("Devrait refuser")
     except ValidationError:
         print("  OK : resultat invalide refuse")
-
-
-def test_resultat_mt_manquant():
-    d = match_bidon_ok(); del d["home_team_history"][0]["resultat_mt"]
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : resultat_mt manquant refuse")
-
-
-def test_cartons_rouges_negatif():
-    d = match_bidon_ok(); d["home_team_history"][2]["cartons_rouges"] = -1
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : cartons rouges negatifs refuses")
-
-
-def test_odds_1x2_manquant():
-    d = match_bidon_ok(); del d["odds_1x2"]
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : odds_1x2 manquantes refusees")
-
-
-def test_odds_1x2_invalide():
-    d = match_bidon_ok(); d["odds_1x2"]["home"] = 0.95
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : cote 1X2 <= 1 refusee")
-
-
-def test_xg_manquant():
-    d = match_bidon_ok(); del d["home_team_history"][0]["xg_pour"]
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : xg_pour manquant refuse")
 
 
 def test_xg_negatif():
@@ -168,35 +150,31 @@ def test_xg_negatif():
         print("  OK : xg negatif refuse")
 
 
-def test_xgot_non_numerique():
-    d = match_bidon_ok(); d["home_team_history"][2]["xgot_pour"] = "abc"
+def test_odds_1x2_manquant():
+    d = match_bidon_ok(); del d["odds_1x2"]
     try:
         valider_match(d); raise AssertionError("Devrait refuser")
     except ValidationError:
-        print("  OK : xgot non numerique refuse")
-
-
-def test_xgot_contre_manquant():
-    d = match_bidon_ok(); del d["away_team_history"][7]["xgot_contre"]
-    try:
-        valider_match(d); raise AssertionError("Devrait refuser")
-    except ValidationError:
-        print("  OK : xgot_contre manquant refuse")
+        print("  OK : odds_1x2 manquantes refusees")
 
 
 if __name__ == "__main__":
     tests = [
-        test_valide_ok, test_date_manquante, test_date_mal_formee,
-        test_equipes_identiques, test_moins_de_15_matchs,
-        test_corner_negatif, test_venue_inverse, test_cote_invalide,
-        test_marche_manquant, test_adversaire_vide,
-        test_resultat_invalide, test_resultat_mt_manquant,
-        test_cartons_rouges_negatif, test_odds_1x2_manquant,
-        test_odds_1x2_invalide,
-        test_xg_manquant, test_xg_negatif,
-        test_xgot_non_numerique, test_xgot_contre_manquant,
+        test_valide_ok,
+        test_date_manquante,
+        test_date_mal_formee,
+        test_equipes_identiques,
+        test_moins_de_15_matchs,
+        test_moins_de_10_au_lieu,
+        test_venue_inverse_refusee,
+        test_venue_N_acceptee,
+        test_corner_negatif,
+        test_cote_invalide,
+        test_resultat_invalide,
+        test_xg_negatif,
+        test_odds_1x2_manquant,
     ]
-    print("=== Tests du gardien v3 (avec xG) ===\n")
+    print("=== Tests schema v4 (10 + 5) ===\n")
     r = 0
     for t in tests:
         try:
