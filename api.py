@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 10.0 : repartition 10 matchs au lieu + 5 globaux.
+Version 11.0 : facteur de ligue + style d'equipe.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,7 @@ from validation.backtest import (
 )
 
 
-app = FastAPI(title="corners-pro", version="1.0.0")
+app = FastAPI(title="corners-pro", version="1.1.0")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -74,6 +74,11 @@ def _page(titre, corps, scripts=""):
     .ic80 {{ font-size:11px; color:#8b949e; }}
     .encadre {{ background:#1f2937; border-left:3px solid #58a6ff;
                 padding:8px 12px; margin:8px 0; font-size:12px; color:#c9d1d9; }}
+    .badge {{ display:inline-block; padding:3px 8px; border-radius:12px;
+              font-size:11px; font-weight:bold; }}
+    .badge-off {{ background:#1f6feb; color:white; }}
+    .badge-def {{ background:#8b1f1f; color:white; }}
+    .badge-eq {{ background:#30363d; color:#c9d1d9; }}
   </style>
 </head>
 <body>
@@ -89,7 +94,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 1.0.0 — répartition 10 + 5</div>
+        <div class="info">Version 1.1.0 — facteur de ligue + style d'équipe</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -436,6 +441,79 @@ def _rendre_histogramme_pit(h):
     """
 
 
+def _badge_style(label):
+    if label == "offensif":
+        return '<span class="badge badge-off">⚔️ OFFENSIF</span>'
+    if label == "defensif":
+        return '<span class="badge badge-def">🛡️ DÉFENSIF</span>'
+    if label == "equilibre":
+        return '<span class="badge badge-eq">⚖️ ÉQUILIBRÉ</span>'
+    return '<span class="badge badge-eq">? inconnu</span>'
+
+
+def _rendre_ligue_style(ligue, style_home, style_away,
+                        nom_home, nom_away):
+    if not ligue:
+        return ""
+
+    connue = ligue.get("connue", False)
+    if connue:
+        statut_ligue = (
+            f'<span class="ok">détectée : {ligue.get("ligue_detectee")}</span>'
+        )
+    else:
+        statut_ligue = (
+            '<span class="warn">non reconnue — référence globale utilisée</span>'
+        )
+
+    taux = ligue.get("taux_reference", 10.0)
+    ref = ligue.get("reference_globale", 10.0)
+    ratio = ligue.get("ratio_brut", 1.0)
+    exposant = ligue.get("exposant", 0.3)
+    facteur = ligue.get("facteur", 1.0)
+
+    return f"""
+      <h2>Contexte championnat et style d'équipe</h2>
+      <p class="info">
+        Compétition : <b>{html_mod.escape(str(ligue.get("competition", "")))}</b>
+        — {statut_ligue}<br>
+        Taux de référence du championnat : <b>{taux:.2f}</b> corners/match
+        (référence globale : {ref:.1f})<br>
+        Ratio brut : {ratio:.3f} → exposant {exposant} →
+        <b>facteur de ligue = {facteur:.4f}</b>
+      </p>
+      <p class="info" style="font-size:11px;">
+        ⚠️ La table des championnats est <b>approximative</b> (moyennes
+        publiques). Elle sert de repère pour normaliser entre ligues, elle
+        ne remplace pas tes données saisies.
+      </p>
+
+      <h3>Style des équipes</h3>
+      <table>
+        <tr><th>Équipe</th><th>Style</th><th>Moy. équipe</th>
+            <th>Moy. attendue</th><th>Ratio</th></tr>
+        <tr>
+          <td>{html_mod.escape(nom_home)} (dom.)</td>
+          <td>{_badge_style(style_home.get("label"))}</td>
+          <td>{style_home.get("moyenne_equipe", 0):.2f}</td>
+          <td>{style_home.get("moyenne_attendue", 0):.2f}</td>
+          <td>{style_home.get("ratio", 1):.3f}</td>
+        </tr>
+        <tr>
+          <td>{html_mod.escape(nom_away)} (ext.)</td>
+          <td>{_badge_style(style_away.get("label"))}</td>
+          <td>{style_away.get("moyenne_equipe", 0):.2f}</td>
+          <td>{style_away.get("moyenne_attendue", 0):.2f}</td>
+          <td>{style_away.get("ratio", 1):.3f}</td>
+        </tr>
+      </table>
+      <p class="info" style="font-size:11px;">
+        Ratio &gt; 1.15 → offensif. Ratio &lt; 0.85 → défensif.
+        Moyenne équipe = (c1h + c2h) / match. Attendue = taux ligue / 2.
+      </p>
+    """
+
+
 def _rendre_ligne_pari(nom, cote_nom, c, match_label):
     label = cote_nom.upper()
     gate = c["gate"]
@@ -705,6 +783,13 @@ async def analyser(request: Request):
     dependance_html = _rendre_dependance_inter(rapport.get("dependance_inter"))
     zi_html = _rendre_zero_inflation(rapport.get("zero_inflation"))
     tornade_html = _rendre_tornade(rapport.get("stabilite"))
+    ligue_style_html = _rendre_ligue_style(
+        rapport.get("ligue"),
+        rapport.get("style_home", {}),
+        rapport.get("style_away", {}),
+        rapport["match"]["home_team"],
+        rapport["match"]["away_team"],
+    )
 
     return _page("Rapport", f"""
       <h1>Rapport</h1>
@@ -713,6 +798,8 @@ async def analyser(request: Request):
         — {rapport['match']['date']} — {rapport['match']['competition']}
       </p>
       <div class="verdict {classe}">{verdict}</div>
+
+      {ligue_style_html}
 
       <h2>Statistiques du modèle</h2>
       <table>
@@ -757,4 +844,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "1.0.0"}
+    return {"status": "ok", "service": "corners-pro", "version": "1.1.0"}
