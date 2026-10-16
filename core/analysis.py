@@ -1,8 +1,7 @@
 """
 Orchestrateur : de la saisie au verdict.
 Integre : ponderation temporelle (age + lieu), IC80, effet score,
-dependance inter-equipes, inflation de zeros, et tornade.
-Repartition : 10 matchs au lieu + 5 matchs globaux ('N').
+dependance inter-equipes, inflation de zeros, tornade, et facteur de ligue.
 """
 import numpy as np
 from data.schema import valider_match, ValidationError
@@ -19,6 +18,7 @@ from core.product_law import (
 from core.pagerank import rapport_pagerank
 from core.score_effect import calculer_facteurs_match
 from core.sensitivity import SCENARIOS, perturber_hist
+from core.league_factor import facteur_ligue, style_equipe
 from decision.ev import ev_posterior, kelly_prudent
 from decision.gate import evaluer_selection
 
@@ -30,11 +30,6 @@ N_MATCHS_GLOBAUX = 5
 
 
 def parser_historique(texte, venue_attendu, equipe, lignes_attendues=15):
-    """
-    Parse un bloc CSV.
-    Les 10 premieres lignes utiles sont considerees au lieu specifie.
-    Les 5 suivantes sont marquees 'N' (globales).
-    """
     erreurs = []
     matchs = []
     ligne_utile = 0
@@ -80,8 +75,9 @@ def parser_historique(texte, venue_attendu, equipe, lignes_attendues=15):
     return matchs
 
 
-def _build_pmf_par_equipe(hist, facteur_2h=1.0, demi_vie=8):
-    pmfs = build_pmf_equipe(hist, demi_vie=demi_vie, facteur_2h=facteur_2h)
+def _build_pmf_par_equipe(hist, facteur_2h=1.0, facteur_ligue=1.0, demi_vie=8):
+    pmfs = build_pmf_equipe(hist, demi_vie=demi_vie, facteur_2h=facteur_2h,
+                            facteur_ligue=facteur_ligue)
     a1 = pmfs["A1"]; a2 = pmfs["A2"]
     c1h = [m["corners_1h"] for m in hist]
     c2h = [m["corners_2h"] for m in hist]
@@ -98,16 +94,12 @@ def _distribution_posteriori(p_centre, n_effectif=20, n_samples=5000, seed=42):
 
 
 def _pipeline(data, params=None):
-    """
-    Pipeline complet avec parametres ajustables.
-    params peut contenir : demi_vie, facteur_moyenne, retirer_extremes,
-    rho_force.
-    """
     params = params or {}
     demi_vie = params.get("demi_vie", 8)
     facteur_moyenne = params.get("facteur_moyenne", 1.0)
     retirer_extremes = params.get("retirer_extremes", 0)
     rho_force = params.get("rho_force", None)
+    f_ligue_override = params.get("facteur_ligue", None)
 
     hist_home_0 = data["home_team_history"]
     hist_away_0 = data["away_team_history"]
@@ -119,15 +111,32 @@ def _pipeline(data, params=None):
         hist_home = hist_home_0
         hist_away = hist_away_0
 
+    # Facteur de ligue
+    if f_ligue_override is not None:
+        f_ligue = float(f_ligue_override)
+        ligue_info = {
+            "competition": data["match"]["competition"],
+            "ligue_detectee": None,
+            "facteur": f_ligue,
+            "connue": False,
+        }
+    else:
+        ligue_info = facteur_ligue(data["match"]["competition"])
+        f_ligue = ligue_info["facteur"]
+
+    # Styles d'equipe (visible dans le rapport)
+    style_home = style_equipe(hist_home_0, data["match"]["competition"])
+    style_away = style_equipe(hist_away_0, data["match"]["competition"])
+
     score_info = calculer_facteurs_match(hist_home_0, hist_away_0, data["odds_1x2"])
     f_home = score_info["facteur_home_2h"]
     f_away = score_info["facteur_away_2h"]
 
     joint_home, cop_home, pmfs_home = _build_pmf_par_equipe(
-        hist_home, facteur_2h=f_home, demi_vie=demi_vie
+        hist_home, facteur_2h=f_home, facteur_ligue=f_ligue, demi_vie=demi_vie
     )
     joint_away, cop_away, pmfs_away = _build_pmf_par_equipe(
-        hist_away, facteur_2h=f_away, demi_vie=demi_vie
+        hist_away, facteur_2h=f_away, facteur_ligue=f_ligue, demi_vie=demi_vie
     )
 
     mc1_pmf = product_pmf(joint_home)
@@ -284,6 +293,9 @@ def _pipeline(data, params=None):
         "score_effect": score_info,
         "dependance_inter": info_mc,
         "zero_inflation": zi_info,
+        "ligue": ligue_info,
+        "style_home": style_home,
+        "style_away": style_away,
     }
 
 
