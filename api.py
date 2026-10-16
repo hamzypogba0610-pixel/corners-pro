@@ -1,6 +1,6 @@
 """
 Serveur web du bot corners-pro.
-Version 13.1 : correction _fmt_pct + traces de debug.
+Version 13.2 : formatage inline (plus de _fmt_pct, plus de _fmt_ev).
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,7 @@ from validation.backtest import (
 )
 
 
-app = FastAPI(title="corners-pro", version="1.3.1")
+app = FastAPI(title="corners-pro", version="1.3.2")
 
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -94,7 +94,7 @@ def racine():
       <h1>corners-pro</h1>
       <div class="card">
         <span class="ok">🟢 Bot en ligne</span>
-        <div class="info">Version 1.3.1 — bug corrigé</div>
+        <div class="info">Version 1.3.2 — formatage inline</div>
       </div>
       <p style="margin-top:24px;"><a href="/nouveau">→ Lancer une nouvelle analyse</a></p>
       <p style="margin-top:8px;"><a href="/equipes">→ Mes équipes sauvegardées</a></p>
@@ -289,7 +289,23 @@ def page_backtest():
         """
 
     h_pit = histogramme_pit(r_mc1["pit"], n_bins=10)
-    hist_html = _rendre_histogramme_pit(h_pit)
+    if h_pit and h_pit["n"] > 0:
+        counts = h_pit["counts"]
+        cmax = max(counts) if counts else 1
+        barres = "".join(
+            f'<div style="flex:1; background:#58a6ff;'
+            f' height:{int(80 * c / cmax)}px;'
+            f' border-radius:2px 2px 0 0; min-height:2px;"></div>'
+            for c in counts
+        )
+        hist_html = (
+            f'<div style="display:flex; align-items:flex-end; gap:4px;'
+            f' height:90px; padding:6px; background:#21262d;'
+            f' border-radius:6px; margin-top:8px;">{barres}</div>'
+            f'<p class="info">n = {h_pit["n"]}</p>'
+        )
+    else:
+        hist_html = '<p class="info">Pas de données PIT.</p>'
 
     return _page("Backtest", f"""
       <h1>Backtest glissant</h1>
@@ -378,37 +394,7 @@ def page_suivi():
       </script>
     """)
 
-    def _fmt_pct(x):
-        return f"{x*100:.2f}%"
-
-
-def _fmt_ev(x):
-    return f"{x:+.4f}"
-
-
-def _rendre_histogramme_pit(h):
-    if not h or h["n"] == 0:
-        return '<p class="info">Pas de données PIT.</p>'
-    counts = h["counts"]
-    cmax = max(counts) if counts else 1
-    barres = "".join(
-        f'<div style="flex:1; background:#58a6ff;'
-        f' height:{int(80 * c / cmax)}px;'
-        f' border-radius:2px 2px 0 0; min-height:2px;"'
-        f' title="{c}"></div>'
-        for c in counts
-    )
-    return f"""
-      <div style="display:flex; align-items:flex-end; gap:4px;
-                  height:90px; padding:6px; background:#21262d;
-                  border-radius:6px; margin-top:8px;">
-        {barres}
-      </div>
-      <p class="info">n = {h['n']}. Barre plate = bonne calibration.</p>
-    """
-
-
-def _badge_style(label):
+    def _badge_style(label):
     if label == "offensif":
         return '<span class="badge badge-off">⚔️ OFFENSIF</span>'
     if label == "defensif":
@@ -435,6 +421,12 @@ def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
     ratio = ligue.get("ratio_brut", 1.0)
     exposant = ligue.get("exposant", 0.3)
     facteur = ligue.get("facteur", 1.0)
+    m_eq = style_home.get("moyenne_equipe", 0)
+    m_at = style_home.get("moyenne_attendue", 0)
+    r_h = style_home.get("ratio", 1)
+    m_eq_a = style_away.get("moyenne_equipe", 0)
+    m_at_a = style_away.get("moyenne_attendue", 0)
+    r_a = style_away.get("ratio", 1)
     return f"""
       <h2>Contexte championnat et style d'équipe</h2>
       <p class="info">
@@ -455,16 +447,16 @@ def _rendre_ligue_style(ligue, style_home, style_away, nom_home, nom_away):
         <tr>
           <td>{html_mod.escape(nom_home)} (dom.)</td>
           <td>{_badge_style(style_home.get("label"))}</td>
-          <td>{style_home.get("moyenne_equipe", 0):.2f}</td>
-          <td>{style_home.get("moyenne_attendue", 0):.2f}</td>
-          <td>{style_home.get("ratio", 1):.3f}</td>
+          <td>{m_eq:.2f}</td>
+          <td>{m_at:.2f}</td>
+          <td>{r_h:.3f}</td>
         </tr>
         <tr>
           <td>{html_mod.escape(nom_away)} (ext.)</td>
           <td>{_badge_style(style_away.get("label"))}</td>
-          <td>{style_away.get("moyenne_equipe", 0):.2f}</td>
-          <td>{style_away.get("moyenne_attendue", 0):.2f}</td>
-          <td>{style_away.get("ratio", 1):.3f}</td>
+          <td>{m_eq_a:.2f}</td>
+          <td>{m_at_a:.2f}</td>
+          <td>{r_a:.3f}</td>
         </tr>
       </table>
     """
@@ -515,8 +507,16 @@ def _rendre_ligne_pari(nom, cote_nom, c, match_label):
     couleur = "ok" if gate["accepte"] else "err"
     statut = "✅ RETENU" if gate["accepte"] else "❌ REFUSÉ"
     ev_info = c["ev_info"]
-    ic_bas = ev_info["ic80_bas"]
-    ic_haut = ev_info["ic80_haut"]
+    p_pct = c['p'] * 100
+    p_brut = c.get("p_brut", c["p"])
+    p_brut_pct = p_brut * 100
+    p_impl_pct = c['p_impl_prop'] * 100
+    ic_bas_pct = ev_info["ic80_bas"] * 100
+    ic_haut_pct = ev_info["ic80_haut"] * 100
+    ev_med = ev_info['ev_mediane']
+    ev_p20 = ev_info['ev_p20']
+    kelly_pct = c['kelly'] * 100
+    calibree = c.get("calibree", False)
     raisons_html = ""
     if not gate["accepte"] and gate["raisons_refus"]:
         items = "".join(f"<li>{r}</li>" for r in gate["raisons_refus"])
@@ -534,25 +534,23 @@ def _rendre_ligne_pari(nom, cote_nom, c, match_label):
             f'data-pari="{label_esc}" '
             f'data-cote="{c["cote"]}" '
             f'data-p="{c["p"]}" '
-            f'data-ev="{ev_info["ev_mediane"]}" '
+            f'data-ev="{ev_med}" '
             f'data-ligne="0">'
             f'📌 Enregistrer cette prédiction</button>'
         )
-    p_brut = c.get("p_brut", c["p"])
-    calibree = c.get("calibree", False)
-    ligne_p = f"{_fmt_pct(c['p'])}"
+    ligne_p = f"{p_pct:.2f}%"
     if calibree and abs(p_brut - c["p"]) > 1e-6:
-        ligne_p += f'<br><span class="ic80">brut {p_brut*100:.2f}%</span>'
+        ligne_p += f'<br><span class="ic80">brut {p_brut_pct:.2f}%</span>'
     return f"""
       <tr>
         <td><b>{label}</b></td>
         <td>{ligne_p}<br>
-            <span class="ic80">[{ic_bas*100:.1f} – {ic_haut*100:.1f}]</span>
+            <span class="ic80">[{ic_bas_pct:.1f} – {ic_haut_pct:.1f}]</span>
         </td>
-        <td>{_fmt_pct(c['p_impl_prop'])}</td>
+        <td>{p_impl_pct:.2f}%</td>
         <td>{c['cote']:.2f}</td>
-        <td>{_fmt_ev(ev_info['ev_mediane'])} / {_fmt_ev(ev_info['ev_p20'])}</td>
-        <td>{c['kelly']*100:.2f}%</td>
+        <td>{ev_med:+.4f} / {ev_p20:+.4f}</td>
+        <td>{kelly_pct:.2f}%</td>
         <td class="{couleur}">{statut}</td>
       </tr>
       <tr><td colspan="7" style="padding:0; border:none;">{raisons_html}</td></tr>
@@ -565,10 +563,12 @@ def _rendre_marche(nom, info, match_label):
         _rendre_ligne_pari(nom, "over", info["cotes"]["over"], match_label)
         + _rendre_ligne_pari(nom, "under", info["cotes"]["under"], match_label)
     )
+    marge_pct = info['marge_totale'] * 100
+    ecart_pct = info['ecart_methode_marge'] * 100
     return f"""
       <h3>{nom} — ligne {info['ligne']}</h3>
-      <p class="info">Marge bookmaker : {_fmt_pct(info['marge_totale'])}
-         — écart méthodes : {_fmt_pct(info['ecart_methode_marge'])}</p>
+      <p class="info">Marge bookmaker : {marge_pct:.2f}%
+         — écart méthodes : {ecart_pct:.2f}%</p>
       <table>
         <tr><th>Pari</th><th>p estimée</th><th>p implicite</th>
             <th>Cote</th><th>EV méd / p20</th><th>Kelly</th><th>Statut</th></tr>
@@ -585,6 +585,16 @@ def _rendre_effet_score(se):
     ha = se["ht_away"]
     ratios = se["ratios"]
     sr = se.get("stats_ratios", {})
+    marge_pct = pf['marge'] * 100
+    p_home_pct = pf['p_home'] * 100
+    p_draw_pct = pf['p_draw'] * 100
+    p_away_pct = pf['p_away'] * 100
+    hh_leads = hh['p_leads_ht'] * 100
+    hh_draw = hh['p_draw_ht'] * 100
+    hh_trails = hh['p_trails_ht'] * 100
+    ha_leads = ha['p_leads_ht'] * 100
+    ha_draw = ha['p_draw_ht'] * 100
+    ha_trails = ha['p_trails_ht'] * 100
 
     def _r(s):
         if s in sr:
@@ -594,20 +604,20 @@ def _rendre_effet_score(se):
     return f"""
       <h2>Effet score (pondération 2e MT)</h2>
       <p class="info">
-        Cotes 1X2 → probas fin de match (marge {_fmt_pct(pf['marge'])}) :<br>
-        Domicile {_fmt_pct(pf['p_home'])} | Nul {_fmt_pct(pf['p_draw'])} | Extérieur {_fmt_pct(pf['p_away'])}
+        Cotes 1X2 → probas fin de match (marge {marge_pct:.2f}%) :<br>
+        Domicile {p_home_pct:.2f}% | Nul {p_draw_pct:.2f}% | Extérieur {p_away_pct:.2f}%
       </p>
       <table>
         <tr><th>Équipe</th><th>Mène HT</th><th>Nul HT</th><th>Menée HT</th><th>Facteur 2e MT</th></tr>
         <tr><td>Domicile</td>
-            <td>{_fmt_pct(hh['p_leads_ht'])}</td>
-            <td>{_fmt_pct(hh['p_draw_ht'])}</td>
-            <td>{_fmt_pct(hh['p_trails_ht'])}</td>
+            <td>{hh_leads:.2f}%</td>
+            <td>{hh_draw:.2f}%</td>
+            <td>{hh_trails:.2f}%</td>
             <td><b>{se['facteur_home_2h']:.3f}</b></td></tr>
         <tr><td>Extérieur</td>
-            <td>{_fmt_pct(ha['p_leads_ht'])}</td>
-            <td>{_fmt_pct(ha['p_draw_ht'])}</td>
-            <td>{_fmt_pct(ha['p_trails_ht'])}</td>
+            <td>{ha_leads:.2f}%</td>
+            <td>{ha_draw:.2f}%</td>
+            <td>{ha_trails:.2f}%</td>
             <td><b>{se['facteur_away_2h']:.3f}</b></td></tr>
       </table>
       <p class="info">
@@ -653,13 +663,17 @@ def _rendre_zero_inflation(zi):
             '<span class="warn">inflation détectée</span>' if inflation
             else '<span class="info">pas d\'inflation</span>'
         )
+        pz_obs = info.get('p_zero_obs', 0.0) * 100
+        pz_nb = info.get('p_zero_nb', 0.0) * 100
+        ecart = info.get('ecart', 0.0) * 100
+        pi_val = info.get('pi', 0.0)
         return f"""
           <tr>
             <td>{label}</td>
-            <td>{info.get('p_zero_obs', 0.0)*100:.1f}%</td>
-            <td>{info.get('p_zero_nb', 0.0)*100:.1f}%</td>
-            <td>{info.get('ecart', 0.0)*100:+.2f} pts</td>
-            <td>{info.get('pi', 0.0):.3f}</td>
+            <td>{pz_obs:.1f}%</td>
+            <td>{pz_nb:.1f}%</td>
+            <td>{ecart:+.2f} pts</td>
+            <td>{pi_val:.3f}</td>
             <td>{statut}</td>
           </tr>
         """
@@ -695,11 +709,12 @@ def _rendre_tornade(stabilite, mode_utilise="COMPLET"):
         badge = ('<span class="ok">STABLE</span>' if stable
                  else '<span class="err">FRAGILE</span>')
         flips = (", ".join(info["flips"]) if info["flips"] else "—")
+        nb_sc = len(info['scenarios'])
         rows.append(f"""
           <tr>
             <td>{m} {c.upper()}</td>
             <td>{badge}</td>
-            <td>{len(info['scenarios'])}</td>
+            <td>{nb_sc}</td>
             <td style="font-size:11px;">{flips}</td>
           </tr>
         """)
@@ -868,4 +883,4 @@ async def analyser(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "corners-pro", "version": "1.3.1"}
+    return {"status": "ok", "service": "corners-pro", "version": "1.3.2"}
